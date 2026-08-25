@@ -1,0 +1,42 @@
+# Example rows for `$DSH_HOME/profiles/web/cordis.patch.yml`.
+# Append this `insert` list to that file (or merge the two rows into the
+# existing top-level array), then restart `dsh web`.
+#
+# A single row is dual-face: the host loader mounts `lib/index.js` (the
+# `usageStats` service), and the web module scanner serves `lib/client.js`
+# (the sidebar pill + settings panel) because the package declares `dsh.client`.
+
+- insert:
+    - id: usage-stats
+      name: 'dsh-usage-stats'
+      config:
+        # Credential reference for the DeepSeek API key (must already exist in
+        # the Models page / $DSH_HOME/.credentials.yaml / environment).
+        apiKeyEnv: DEEPSEEK_API_KEY
+        # Balance endpoint base URL.
+        baseUrl: https://api.deepseek.com
+        # One-click top-up page opened by the UI.
+        topUpUrl: https://platform.deepseek.com/top_up
+        # How often balance and pricing are polled (ms).
+        refreshIntervalMs: 60000
+
+        # ---- pricing auto-sync ----
+        # Official pricing page to fetch and parse. There is no JSON pricing
+        # API; the plugin fetches this docs page and parses its price table.
+        # Set to null to disable auto-sync and use the static `pricing` below.
+        pricingSource: https://api-docs.deepseek.com/quick_start/pricing/
+        # Model whose synced price is used for the flat cost estimate.
+        estimateModel: deepseek-v4-pro
+        # USD→CNY rate used to convert the USD price-table estimate to the CNY
+        # figure shown beside the (CNY) balance. Adjust to your billing rate.
+        usdToCnyRate: 7.2
+
+        # Static fallback (per 1M tokens, CNY) used only when auto-sync is
+        # disabled or the page cannot be parsed. Keep null to rely on auto-sync.
+        pricing: null
+        # pricing:
+        #   currency: CNY
+        #   input: 0.27
+        #   output: 1.10
+        #   cacheRead: 0.07
+        #   cacheWrite: 0.27
