@@ -1,0 +1,20 @@
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-flash-vision-exp
+  reasoningEffort: high
+llm-pi-ai:
+  providers:
+    kimi-coding:
+      apiKeyEnv: KIMI_CODING_API_KEY
+llm-deepseek:
+  models:
+    - id: deepseek-v4-flash
+      name: DeepSeek-V4-Flash
+      contextWindow: 1000000
+    - id: deepseek-v4-pro
+      name: DeepSeek-V4-Pro
+      contextWindow: 1000000
+    - id: deepseek-v4-flash-vision-exp
+      name: deepseek-v4-flash-vision-exp
