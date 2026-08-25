@@ -151,7 +151,17 @@ export class GithubSyncService extends TypertRemoteService {
   // ---------------------------------------------------------------- backup --
   async backupToRepo(repoDir) {
     const cfg = this.loadConfig();
-    const plugins = cfg.plugins && cfg.plugins.length ? cfg.plugins : DEFAULT_PLUGINS;
+    let plugins = cfg.plugins && cfg.plugins.length ? cfg.plugins : DEFAULT_PLUGINS;
+    /* 自动补齐：枚举本机已装的全部 dsh-* 插件（新增插件无需改配置） */
+    try {
+      const nm = path.join(home(), ".dsh", "profiles", "node_modules");
+      const all = (await fsp.readdir(nm, { withFileTypes: true }))
+        .filter((e) => e.isDirectory() && e.name.startsWith("dsh-"))
+        .map((e) => e.name);
+      plugins = Array.from(new Set([...plugins, ...all]));
+    } catch {
+      /* ignore enumeration failure */
+    }
     const nodeModules = path.join(home(), ".dsh", "profiles", "node_modules");
     const webConfig = path.join(home(), ".dsh", "profiles", "web");
     const settingsSrc = path.join(home(), ".dsh", "settings.yaml");
