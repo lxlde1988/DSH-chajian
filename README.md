@@ -72,6 +72,14 @@ git commit -m "更新插件与习惯"
 git push
 ```
 
+> 如果 `git push` 因 `github.com` 连不上而失败（**中国大陆网络常见**：`github.com` 被阻断/超时，
+> 但 `api.github.com` 通常可用），请改用 API 推送：
+> ```powershell
+> $env:GH_PUSH_TOKEN = "github_pat_xxx"   # 你的令牌
+> .\scripts\push-via-api.ps1              # 走 api.github.com，无需连 github.com
+> ```
+> 该脚本会把仓库全部文件打包成一个提交写入 `main`（可重复运行，追加新提交）。
+
 ---
 
 ## 日常从 GitHub 同步新内容

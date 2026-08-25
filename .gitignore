@@ -7,6 +7,8 @@
 .env
 .env.*
 !*.example.yaml
+# 推送令牌（push-via-api.ps1 使用）
+.push-token
 
 # ===== DSH 会话日志与本地数据（大且含对话隐私）=====
 .dsh/sessions/
