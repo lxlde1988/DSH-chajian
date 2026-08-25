@@ -17,6 +17,8 @@
  */
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const DEFAULTS = {
   apiKeyEnv: "DEEPSEEK_API_KEY",
@@ -36,6 +38,10 @@ const DEFAULTS = {
   // Static fallback price table (per 1M tokens) used when auto-sync is
   // disabled or the page cannot be parsed.
   pricing: null,
+  // Z.ai（智谱）Coding Plan：订阅制没有按量余额，改查服务端配额窗口
+  // （5 小时 token 窗口 / 周配额 / 工具搜索额度），Bearer 同一个 API key。
+  zaiApiKeyEnv: "ZAI_API_KEY",
+  zaiQuotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
 };
 
 /**
@@ -386,6 +392,8 @@ export class UsageStatsService extends TypertRemoteService {
     this.estimateModel = config.estimateModel ?? DEFAULTS.estimateModel;
     this.usdToCnyRate = config.usdToCnyRate ?? DEFAULTS.usdToCnyRate;
     this.pricing = config.pricing ?? null;
+    this.zaiApiKeyEnv = config.zaiApiKeyEnv ?? DEFAULTS.zaiApiKeyEnv;
+    this.zaiQuotaUrl = config.zaiQuotaUrl ?? DEFAULTS.zaiQuotaUrl;
 
     this.usage = {
       inputTokens: 0,
@@ -404,15 +412,20 @@ export class UsageStatsService extends TypertRemoteService {
     this.pricingSyncError = null;
     this.pricingSyncing = null;
 
+    this.zaiQuota = null; // { level, fiveHour, weekly, tools, fetchedAt }
+    this.zaiQuotaError = null;
+
     ctx.on("session/event", (session, event) => this.foldEvent(event));
 
     ctx.interval(() => {
       this.refresh().catch(() => {});
       this.syncPricing().catch(() => {});
+      this.fetchZaiQuota().catch(() => {});
     }, this.refreshIntervalMs);
 
     this.refresh().catch(() => {});
     this.syncPricing().catch(() => {});
+    this.fetchZaiQuota().catch(() => {});
   }
 
   foldEvent(event) {
@@ -567,6 +580,73 @@ export class UsageStatsService extends TypertRemoteService {
     };
   }
 
+  /** 当前 agent 默认模型（读 ~/.dsh/settings.yaml，用于判断按套餐还是按量展示）。 */
+  agentModel() {
+    try {
+      const raw = readFileSync(
+        path.join(process.env.USERPROFILE || process.env.HOME || ".", ".dsh", "settings.yaml"),
+        "utf8",
+      );
+      const provider = (raw.match(/^\s*provider:\s*(\S+)/m) || [])[1] || null;
+      const model = (raw.match(/^\s*model:\s*(\S+)/m) || [])[1] || null;
+      return { provider, model };
+    } catch {
+      return { provider: null, model: null };
+    }
+  }
+
+  /**
+   * 拉取 Z.ai（智谱）Coding Plan 服务端配额：
+   * TOKENS_LIMIT unit=3 → 5 小时 token 窗口；unit=6 → 周配额；
+   * TIME_LIMIT unit=5 → 工具/搜索额度（月度）。均为 percentage + nextResetTime。
+   */
+  async fetchZaiQuota() {
+    try {
+      const resolved = await this.ctx.credentials.resolve(credentialRef(this.zaiApiKeyEnv));
+      if (!resolved) {
+        this.zaiQuotaError = { code: "NO_CREDENTIAL", message: `未配置凭据 ${this.zaiApiKeyEnv}` };
+        return;
+      }
+      const response = await fetch(this.zaiQuotaUrl, {
+        headers: { Authorization: `Bearer ${resolved.value}`, Accept: "application/json" },
+      });
+      if (!response.ok) {
+        this.zaiQuotaError = { code: "HTTP_ERROR", message: `配额接口返回 HTTP ${response.status}` };
+        return;
+      }
+      const body = await response.json();
+      const data = body && body.data;
+      const limits = data && Array.isArray(data.limits) ? data.limits : [];
+      let fiveHour = null;
+      let weekly = null;
+      let tools = null;
+      for (const lim of limits) {
+        const pct = Number(lim.percentage) || 0;
+        const resetAt = typeof lim.nextResetTime === "number" ? lim.nextResetTime : null;
+        if (lim.type === "TOKENS_LIMIT" && lim.unit === 3 && !fiveHour) {
+          fiveHour = { percentage: pct, resetAt };
+        } else if (lim.type === "TOKENS_LIMIT" && lim.unit === 6 && !weekly) {
+          weekly = { percentage: pct, resetAt };
+        } else if (lim.type === "TIME_LIMIT" && lim.unit === 5 && !tools) {
+          tools = { percentage: pct, remaining: typeof lim.remaining === "number" ? lim.remaining : null, resetAt };
+        }
+      }
+      this.zaiQuota = {
+        level: (data && data.level) || null,
+        fiveHour,
+        weekly,
+        tools,
+        fetchedAt: Date.now(),
+      };
+      this.zaiQuotaError = null;
+    } catch (error) {
+      this.zaiQuotaError = {
+        code: "FETCH_ERROR",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   snapshot() {
     return {
       balance: this.balance,
@@ -594,6 +674,9 @@ export class UsageStatsService extends TypertRemoteService {
           }
         : null,
       pricing: this.pricingState(),
+      zaiQuota: this.zaiQuota,
+      zaiQuotaError: this.zaiQuotaError,
+      agent: this.agentModel(),
       lastRefresh: this.lastRefresh,
       error: this.lastError,
       topUpUrl: this.topUpUrl,
