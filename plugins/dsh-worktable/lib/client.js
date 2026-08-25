@@ -18248,6 +18248,9 @@ function SplitWorkspace() {
   (0, import_react.useEffect)(() => {
     if (!snap.active) return;
     const onKey = (event) => {
+      if (event.isComposing || event.keyCode === 229) return;
+      const t = event.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (event.key === "Escape") splitStore.close();
     };
     window.addEventListener("keydown", onKey);
@@ -19085,6 +19088,7 @@ function buildMountContent(folder, d) {
   return { kind: "iframe", url: "/api/worktable/site/" + encodeURIComponent(dir) + "/" + encodeURIComponent(name), title: name };
 }
 var notifyStateSeenRef = { current: {} };
+var splitAutoCloseTimer = { current: null };
 function clearNotifyAck(sid) {
   try {
     const all = loadNotifyAck();
@@ -19137,8 +19141,18 @@ function syncSessionScope(list2) {
             const pluginSwitch = pluginOpenedSessionsRef.current.has(current);
             pluginOpenedSessionsRef.current.delete(current);
             if (!pluginSwitch) {
-              suppressRestoreRef.current = true;
-              splitStore.close();
+              if (splitAutoCloseTimer.current) clearTimeout(splitAutoCloseTimer.current);
+              splitAutoCloseTimer.current = setTimeout(() => {
+                splitAutoCloseTimer.current = null;
+                try {
+                  if (!splitStore.active || !splitStore.spec) return;
+                  if (projectAttachRef.attached !== attached) return;
+                  const cur2 = list2.getSnapshot()?.current ?? "";
+              /* 用户反馈：打字时被切到其他会话导致分屏自动关闭、跳回控制室。
+                 现改为：会话切换不再自动关闭分屏；仅手动点 ✕ / 按 Esc 才关闭。 */
+                } catch {
+                }
+              }, 1500);
             }
           }
         }
