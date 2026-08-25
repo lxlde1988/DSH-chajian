@@ -414,6 +414,7 @@ export class UsageStatsService extends TypertRemoteService {
 
     this.zaiQuota = null; // { level, fiveHour, weekly, tools, fetchedAt }
     this.zaiQuotaError = null;
+    this.sessionModel = null; // 最近一次实际调用的 { provider, model, at }
 
     ctx.on("session/event", (session, event) => this.foldEvent(event));
 
@@ -444,6 +445,16 @@ export class UsageStatsService extends TypertRemoteService {
       return;
     }
     if (event.type !== "assistant/message") return;
+    // 记录本会话最近一次实际调用的模型（assistant/message 带 message.source），
+    // 作为 settings.yaml 缺失/未切换时的兜底信号。
+    const src = event.data && event.data.message && event.data.message.source;
+    if (src && (src.provider || src.model)) {
+      this.sessionModel = {
+        provider: src.provider || null,
+        model: src.model || null,
+        at: typeof event.time === "number" ? event.time : Date.now(),
+      };
+    }
     const usage = event.data && event.data.usage;
     if (!usage) return;
     const input = usage.inputTokens ?? 0;
@@ -589,10 +600,12 @@ export class UsageStatsService extends TypertRemoteService {
       );
       const provider = (raw.match(/^\s*provider:\s*(\S+)/m) || [])[1] || null;
       const model = (raw.match(/^\s*model:\s*(\S+)/m) || [])[1] || null;
-      return { provider, model };
+      if (provider || model) return { provider, model, source: "settings" };
     } catch {
-      return { provider: null, model: null };
+      /* settings 不可读时落到会话兜底 */
     }
+    if (this.sessionModel) return { ...this.sessionModel, source: "session" };
+    return { provider: null, model: null, source: null };
   }
 
   /**
