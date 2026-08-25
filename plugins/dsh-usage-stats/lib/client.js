@@ -26,6 +26,16 @@ window.__ModuleLoader__.load({
 .usage-stats-pill:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06))}
 .usage-stats-pill.usage-stats-rail{border-radius:50%;justify-content:center;width:36px;height:36px;padding:0}
 .usage-stats-coin{font-weight:600;line-height:1}
+.usage-stats-quota{display:inline-flex;align-items:center;gap:10px;padding:0 2px}
+.usage-stats-qring{display:inline-flex;flex-direction:column;align-items:center;gap:2px;line-height:1}
+.usage-stats-qring svg{display:block}
+.usage-stats-qring-cap{font-size:9px;line-height:1;color:var(--dsw-alias-label-secondary,#888);letter-spacing:.02em}
+.usage-stats-qbar{display:flex;align-items:center;gap:8px;margin:2px 0}
+.usage-stats-qbar-label{flex:0 0 64px;font-size:12px;color:var(--dsw-alias-label-secondary,#666);white-space:nowrap}
+.usage-stats-qbar-track{flex:1;height:6px;border-radius:3px;background:rgba(128,128,128,.18);overflow:hidden;min-width:0}
+.usage-stats-qbar-fill{display:block;height:100%;border-radius:3px;transition:width .3s ease}
+.usage-stats-qbar-val{flex:0 0 40px;text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.usage-stats-qbars{display:flex;flex-direction:column;gap:8px;margin:4px 0}
 .usage-stats-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;line-height:20px}
 .usage-stats-lines{display:flex;flex-direction:column;min-width:0}
 .usage-stats-sublabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#888)}
@@ -161,6 +171,82 @@ window.__ModuleLoader__.load({
       return "#2e7d32";
     }
 
+    /** 圆环（药丸内）：pct 百分比 + 底部小标注，颜色随用量变化。 */
+    function QuotaRing(item, caption, size = 22) {
+      if (!item) return null;
+      const pct = Math.min(100, Math.max(0, Number(item.percentage) || 0));
+      const stroke = size >= 24 ? 4 : 3;
+      const r = (size - stroke) / 2;
+      const c = 2 * Math.PI * r;
+      const dash = (pct / 100) * c;
+      const color = quotaColor(pct);
+      return React.createElement(
+        "span",
+        {
+          className: "usage-stats-qring",
+          title: `${caption} 已用 ${Math.round(pct)}%`,
+        },
+        React.createElement(
+          "svg",
+          {
+            width: size,
+            height: size,
+            viewBox: `0 0 ${size} ${size}`,
+            "aria-hidden": true,
+            focusable: "false",
+          },
+          React.createElement("circle", {
+            cx: size / 2,
+            cy: size / 2,
+            r,
+            fill: "none",
+            stroke: "currentColor",
+            strokeOpacity: 0.18,
+            strokeWidth: stroke,
+          }),
+          React.createElement("circle", {
+            cx: size / 2,
+            cy: size / 2,
+            r,
+            fill: "none",
+            stroke: color,
+            strokeWidth: stroke,
+            strokeLinecap: "round",
+            strokeDasharray: `${dash} ${c - dash}`,
+            transform: `rotate(-90 ${size / 2} ${size / 2})`,
+          }),
+        ),
+        caption
+          ? React.createElement("span", { className: "usage-stats-qring-cap" }, caption)
+          : null,
+      );
+    }
+
+    /** 进度条（弹窗/设置面板）：标签 | 轨道+彩色填充 | 百分比。 */
+    function QuotaBar(label, item, hint) {
+      if (!item) return null;
+      const pct = Math.min(100, Math.max(0, Number(item.percentage) || 0));
+      const color = quotaColor(pct);
+      return React.createElement(
+        "div",
+        { className: "usage-stats-qbar", title: hint || `${label} 已用 ${Math.round(pct)}%` },
+        React.createElement("span", { className: "usage-stats-qbar-label" }, label),
+        React.createElement(
+          "span",
+          { className: "usage-stats-qbar-track" },
+          React.createElement("span", {
+            className: "usage-stats-qbar-fill",
+            style: { width: pct + "%", background: color },
+          }),
+        ),
+        React.createElement(
+          "span",
+          { className: "usage-stats-qbar-val", style: { color } },
+          `${Math.round(pct)}%`,
+        ),
+      );
+    }
+
     // 当前是否跑在订阅制服务商（Z.ai/智谱 Coding Plan）上 —— 是则隐藏美元成本。
     function onPlan(snapshot) {
       const agent = snapshot && snapshot.agent;
@@ -218,11 +304,16 @@ window.__ModuleLoader__.load({
             onMouseLeave: onLeave,
           },
           React.createElement("div", { className: "usage-stats-pop-title" }, q ? "用量与配额" : "用量与余额"),
-        q && q.fiveHour
+        q
           ? React.createElement(
               "div",
-              { className: "usage-stats-pop-balance", style: { color: quotaColor(worstQuotaPct(q)) } },
-              quotaText(snapshot),
+              { className: "usage-stats-qbars" },
+              QuotaBar("5h 窗口", q.fiveHour,
+                q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+              QuotaBar("周配额", q.weekly,
+                q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+              QuotaBar("工具/搜索", q.tools,
+                q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
             )
           : null,
         q
@@ -231,23 +322,8 @@ window.__ModuleLoader__.load({
               q.fiveHour && q.fiveHour.resetAt != null
                 ? popRow("5h 窗口重置", timeText(q.fiveHour.resetAt))
                 : null,
-              q.weekly
-                ? popRow(
-                    "周配额已用",
-                    `${Math.round(q.weekly.percentage)}%`,
-                    { color: quotaColor(q.weekly.percentage) },
-                  )
-                : null,
               q.weekly && q.weekly.resetAt != null
                 ? popRow("周配额重置", timeText(q.weekly.resetAt))
-                : null,
-              q.tools
-                ? popRow(
-                    "工具/搜索额度",
-                    q.tools.remaining != null
-                      ? `剩 ${q.tools.remaining}（${Math.round(q.tools.percentage)}%）`
-                      : `${Math.round(q.tools.percentage)}%`,
-                  )
                 : null,
             ].filter(Boolean)
           : null,
@@ -484,27 +560,26 @@ window.__ModuleLoader__.load({
               }
             },
           },
-          React.createElement(
-            "span",
-            {
-              className: "usage-stats-coin",
-              style: qtext != null ? { color: quotaColor(worstQuotaPct(q)) } : undefined,
-            },
-            qtext != null ? "⚡" : "¥",
-          ),
-          wide
+          qtext != null
             ? React.createElement(
                 "span",
-                {
-                  className: "usage-stats-label",
-                  style: qtext != null ? { color: quotaColor(worstQuotaPct(q)) } : undefined,
-                },
-                label,
-                lastCostSuffix
-                  ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
-                  : null,
+                { className: "usage-stats-quota" },
+                QuotaRing(q.fiveHour, wide ? "5h" : null, wide ? 22 : 18),
+                wide && q.weekly ? QuotaRing(q.weekly, "周", 22) : null,
               )
-            : null,
+            : [
+                React.createElement("span", { className: "usage-stats-coin" }, "¥"),
+                wide
+                  ? React.createElement(
+                      "span",
+                      { className: "usage-stats-label" },
+                      label,
+                      lastCostSuffix
+                        ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
+                        : null,
+                    )
+                  : null,
+              ],
         ),
         pop
           ? React.createElement(UsageStatsPopover, {
@@ -600,11 +675,13 @@ window.__ModuleLoader__.load({
           q
             ? React.createElement(
                 "div",
-                {
-                  className: "usage-stats-balance",
-                  style: { color: quotaColor(worstQuotaPct(q)) },
-                },
-                quotaText(snapshot) || "—",
+                { className: "usage-stats-qbars" },
+                QuotaBar("5h 窗口", q.fiveHour,
+                  q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+                QuotaBar("周配额", q.weekly,
+                  q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+                QuotaBar("工具/搜索", q.tools,
+                  q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
               )
             : React.createElement(
                 "div",
@@ -614,33 +691,11 @@ window.__ModuleLoader__.load({
           q
             ? [
                 q.level ? ["套餐档位", q.level] : null,
-                q.fiveHour
-                  ? [
-                      "5h 窗口已用",
-                      `${Math.round(q.fiveHour.percentage)}%${
-                        q.fiveHour.resetAt != null
-                          ? `（重置 ${timeText(q.fiveHour.resetAt)}）`
-                          : ""
-                      }`,
-                    ]
+                q.fiveHour && q.fiveHour.resetAt != null
+                  ? ["5h 窗口重置", timeText(q.fiveHour.resetAt)]
                   : null,
-                q.weekly
-                  ? [
-                      "周配额已用",
-                      `${Math.round(q.weekly.percentage)}%${
-                        q.weekly.resetAt != null
-                          ? `（重置 ${timeText(q.weekly.resetAt)}）`
-                          : ""
-                      }`,
-                    ]
-                  : null,
-                q.tools
-                  ? [
-                      "工具/搜索额度",
-                      q.tools.remaining != null
-                        ? `剩 ${q.tools.remaining}（${Math.round(q.tools.percentage)}%）`
-                        : `${Math.round(q.tools.percentage)}%`,
-                    ]
+                q.weekly && q.weekly.resetAt != null
+                  ? ["周配额重置", timeText(q.weekly.resetAt)]
                   : null,
                 balance != null ? ["DeepSeek 钱包", balance] : null,
               ]
