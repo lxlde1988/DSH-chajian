@@ -133,6 +133,40 @@ window.__ModuleLoader__.load({
       return (snapshot && snapshot.topUpUrl) || DEFAULT_TOP_UP_URL;
     }
 
+    // ------------------------------------------------------ GLM plan quota --
+    function quotaOf(snapshot) {
+      return (snapshot && snapshot.zaiQuota) || null;
+    }
+
+    function quotaText(snapshot) {
+      const q = quotaOf(snapshot);
+      if (!q) return null;
+      const parts = [];
+      if (q.fiveHour) parts.push(`5h ${Math.round(q.fiveHour.percentage)}%`);
+      if (q.weekly) parts.push(`周 ${Math.round(q.weekly.percentage)}%`);
+      return parts.length ? parts.join(" · ") : null;
+    }
+
+    function worstQuotaPct(q) {
+      if (!q) return 0;
+      const pcts = [q.fiveHour, q.weekly]
+        .filter(Boolean)
+        .map((x) => Number(x.percentage) || 0);
+      return pcts.length ? Math.max(...pcts) : 0;
+    }
+
+    function quotaColor(pct) {
+      if (pct >= 90) return "#d64545";
+      if (pct >= 70) return "#b8860b";
+      return "#2e7d32";
+    }
+
+    // 当前是否跑在订阅制服务商（Z.ai/智谱 Coding Plan）上 —— 是则隐藏美元成本。
+    function onPlan(snapshot) {
+      const agent = snapshot && snapshot.agent;
+      return !!(agent && agent.provider && String(agent.provider).toLowerCase().includes("zai"));
+    }
+
     function formatTokens(n) {
       return typeof n === "number" ? n.toLocaleString() : "0";
     }
@@ -159,6 +193,15 @@ window.__ModuleLoader__.load({
       const pricing = snapshot.pricing;
       const balance = balanceText(snapshot);
       const topUpUrl = topUpUrlOf(snapshot);
+      const q = quotaOf(snapshot);
+      const plan = onPlan(snapshot);
+      const popRow = (k, v, vStyle) =>
+        React.createElement(
+          "div",
+          { className: "usage-stats-pop-row" },
+          React.createElement("span", { className: "usage-stats-k" }, k),
+          React.createElement("span", { className: "usage-stats-v", style: vStyle }, v),
+        );
       return ReactDOM.createPortal(
         React.createElement(
           "div",
@@ -174,12 +217,50 @@ window.__ModuleLoader__.load({
             onMouseEnter: onEnter,
             onMouseLeave: onLeave,
           },
-          React.createElement("div", { className: "usage-stats-pop-title" }, "用量与余额"),
-        React.createElement(
-          "div",
-          { className: "usage-stats-pop-balance" },
-          balance != null ? balance : "获取中…",
-        ),
+          React.createElement("div", { className: "usage-stats-pop-title" }, q ? "用量与配额" : "用量与余额"),
+        q && q.fiveHour
+          ? React.createElement(
+              "div",
+              { className: "usage-stats-pop-balance", style: { color: quotaColor(worstQuotaPct(q)) } },
+              quotaText(snapshot),
+            )
+          : null,
+        q
+          ? [
+              q.level ? popRow("套餐档位", q.level) : null,
+              q.fiveHour && q.fiveHour.resetAt != null
+                ? popRow("5h 窗口重置", timeText(q.fiveHour.resetAt))
+                : null,
+              q.weekly
+                ? popRow(
+                    "周配额已用",
+                    `${Math.round(q.weekly.percentage)}%`,
+                    { color: quotaColor(q.weekly.percentage) },
+                  )
+                : null,
+              q.weekly && q.weekly.resetAt != null
+                ? popRow("周配额重置", timeText(q.weekly.resetAt))
+                : null,
+              q.tools
+                ? popRow(
+                    "工具/搜索额度",
+                    q.tools.remaining != null
+                      ? `剩 ${q.tools.remaining}（${Math.round(q.tools.percentage)}%）`
+                      : `${Math.round(q.tools.percentage)}%`,
+                  )
+                : null,
+            ].filter(Boolean)
+          : null,
+        q ? React.createElement("div", { className: "usage-stats-pop-divider" }) : null,
+        !q
+          ? React.createElement(
+              "div",
+              { className: "usage-stats-pop-balance" },
+              balance != null ? balance : "获取中…",
+            )
+          : balance != null
+            ? popRow("DeepSeek 钱包", balance)
+            : null,
         snapshot.balance && snapshot.balance.infos
           ? snapshot.balance.infos.map((info) =>
               React.createElement(
@@ -217,17 +298,19 @@ window.__ModuleLoader__.load({
             )
           : null,
         React.createElement("div", { className: "usage-stats-pop-divider" }),
-        React.createElement(
-          "div",
-          { className: "usage-stats-pop-row" },
-          React.createElement("span", { className: "usage-stats-k" }, "预估费用"),
-          React.createElement(
-            "span",
-            { className: "usage-stats-v" },
-            cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
-          ),
-        ),
-        lastRound && lastRound.cost
+        plan
+          ? popRow("计费方式", "GLM Coding Plan（订阅制，无按量费用）")
+          : React.createElement(
+              "div",
+              { className: "usage-stats-pop-row" },
+              React.createElement("span", { className: "usage-stats-k" }, "预估费用"),
+              React.createElement(
+                "span",
+                { className: "usage-stats-v" },
+                cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
+              ),
+            ),
+        !plan && lastRound && lastRound.cost
           ? React.createElement(
               "div",
               { className: "usage-stats-pop-row" },
@@ -237,6 +320,13 @@ window.__ModuleLoader__.load({
                 { className: "usage-stats-v" },
                 `¥${lastRound.cost.cnyAmount.toFixed(2)}`,
               ),
+            )
+          : null,
+        snapshot.zaiQuotaError && plan
+          ? React.createElement(
+              "div",
+              { className: "usage-stats-error" },
+              `GLM 配额获取失败：${snapshot.zaiQuotaError.message}`,
             )
           : null,
         React.createElement(
@@ -332,10 +422,14 @@ window.__ModuleLoader__.load({
       }, [refresh]);
 
       const text = balanceText(snapshot);
-      const label = text != null ? text : failed ? (errMsg || "获取失败") : "加载中…";
+      const q = quotaOf(snapshot);
+      const qtext = quotaText(snapshot);
+      const plan = onPlan(snapshot);
+      const label =
+        qtext != null ? qtext : text != null ? text : failed ? (errMsg || "获取失败") : "加载中…";
       const lastRound = snapshot ? snapshot.lastRound : null;
       const lastCostSuffix =
-        lastRound && lastRound.cost
+        !plan && lastRound && lastRound.cost
           ? `（-¥${lastRound.cost.cnyAmount.toFixed(2)}）`
           : "";
 
@@ -381,7 +475,7 @@ window.__ModuleLoader__.load({
             ref: pillRef,
             type: "button",
             className: "usage-stats-pill" + (wide ? "" : " usage-stats-rail"),
-            "aria-label": text ? `余额 ${text}` : "用量与余额",
+            "aria-label": qtext != null ? `GLM 配额 ${qtext}` : text ? `余额 ${text}` : "用量与余额",
             onClick: () => {
               try {
                 window.open(topUpUrlOf(snapshot), "_blank", "noopener");
@@ -390,11 +484,21 @@ window.__ModuleLoader__.load({
               }
             },
           },
-          React.createElement("span", { className: "usage-stats-coin" }, "¥"),
+          React.createElement(
+            "span",
+            {
+              className: "usage-stats-coin",
+              style: qtext != null ? { color: quotaColor(worstQuotaPct(q)) } : undefined,
+            },
+            qtext != null ? "⚡" : "¥",
+          ),
           wide
             ? React.createElement(
                 "span",
-                { className: "usage-stats-label" },
+                {
+                  className: "usage-stats-label",
+                  style: qtext != null ? { color: quotaColor(worstQuotaPct(q)) } : undefined,
+                },
                 label,
                 lastCostSuffix
                   ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
@@ -463,6 +567,8 @@ window.__ModuleLoader__.load({
       const cost = snapshot ? snapshot.cost : null;
       const pricing = snapshot ? snapshot.pricing : null;
       const balance = balanceText(snapshot);
+      const q = quotaOf(snapshot);
+      const plan = onPlan(snapshot);
 
       const rows = [
         ["输入 tokens", usage ? formatTokens(usage.inputTokens) : "—"],
@@ -471,10 +577,12 @@ window.__ModuleLoader__.load({
         ["缓存写 tokens", usage ? formatTokens(usage.cacheWriteTokens) : "—"],
         ["合计 tokens", usage ? formatTokens(usage.totalTokens) : "—"],
         ["缓存命中率", usage ? formatRate(usage.cacheHitRate) : "—"],
-        [
-          "预估费用",
-          cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "（未配置价格表）",
-        ],
+        plan
+          ? ["计费方式", "GLM Coding Plan（订阅制，无按量费用）"]
+          : [
+              "预估费用",
+              cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "（未配置价格表）",
+            ],
         ["最后刷新", timeText(snapshot && snapshot.lastRefresh)],
       ];
 
@@ -487,14 +595,66 @@ window.__ModuleLoader__.load({
           React.createElement(
             "div",
             { className: "usage-stats-k" },
-            "账户余额",
+            q ? "GLM Coding Plan 配额" : "账户余额",
           ),
-          React.createElement(
-            "div",
-            { className: "usage-stats-balance" },
-            balance != null ? balance : "—",
-          ),
-          snapshot && snapshot.balance && snapshot.balance.infos
+          q
+            ? React.createElement(
+                "div",
+                {
+                  className: "usage-stats-balance",
+                  style: { color: quotaColor(worstQuotaPct(q)) },
+                },
+                quotaText(snapshot) || "—",
+              )
+            : React.createElement(
+                "div",
+                { className: "usage-stats-balance" },
+                balance != null ? balance : "—",
+              ),
+          q
+            ? [
+                q.level ? ["套餐档位", q.level] : null,
+                q.fiveHour
+                  ? [
+                      "5h 窗口已用",
+                      `${Math.round(q.fiveHour.percentage)}%${
+                        q.fiveHour.resetAt != null
+                          ? `（重置 ${timeText(q.fiveHour.resetAt)}）`
+                          : ""
+                      }`,
+                    ]
+                  : null,
+                q.weekly
+                  ? [
+                      "周配额已用",
+                      `${Math.round(q.weekly.percentage)}%${
+                        q.weekly.resetAt != null
+                          ? `（重置 ${timeText(q.weekly.resetAt)}）`
+                          : ""
+                      }`,
+                    ]
+                  : null,
+                q.tools
+                  ? [
+                      "工具/搜索额度",
+                      q.tools.remaining != null
+                        ? `剩 ${q.tools.remaining}（${Math.round(q.tools.percentage)}%）`
+                        : `${Math.round(q.tools.percentage)}%`,
+                    ]
+                  : null,
+                balance != null ? ["DeepSeek 钱包", balance] : null,
+              ]
+                .filter(Boolean)
+                .map(([k, v]) =>
+                  React.createElement(
+                    "div",
+                    { key: k, className: "usage-stats-row" },
+                    React.createElement("span", { className: "usage-stats-k" }, k),
+                    React.createElement("span", { className: "usage-stats-v" }, v),
+                  ),
+                )
+            : null,
+          !q && snapshot && snapshot.balance && snapshot.balance.infos
             ? snapshot.balance.infos.map((info) =>
                 React.createElement(
                   "div",
@@ -517,6 +677,13 @@ window.__ModuleLoader__.load({
                 "div",
                 { className: "usage-stats-error" },
                 `${snapshot.error.message}`,
+              )
+            : null,
+          snapshot && snapshot.zaiQuotaError
+            ? React.createElement(
+                "div",
+                { className: "usage-stats-error" },
+                `GLM 配额获取失败：${snapshot.zaiQuotaError.message}`,
               )
             : null,
           React.createElement(
