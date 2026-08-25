@@ -402,7 +402,16 @@ export class UsageStatsService extends TypertRemoteService {
       cacheWriteTokens: 0,
     };
     this.usageByHour = {};
+    // 按服务商拆账：只有 DeepSeek 系调用计入“按量费用”（GLM 走套餐、不按量计费）。
+    this.dsUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    this.dsUsageByHour = {};
     this.lastRound = null; // 最近一轮：user/message 重置，后续 assistant/message 累计
+    this.lastRoundDs = null; // 本轮中 DeepSeek 系调用的部分（用于本轮费用）
     this.balance = null;
     this.lastRefresh = null;
     this.lastError = null;
@@ -441,6 +450,13 @@ export class UsageStatsService extends TypertRemoteService {
         cacheReadTokens: 0,
         cacheWriteTokens: 0,
         at: typeof event.time === "number" ? event.time : Date.now(),
+      };
+      this.lastRoundDs = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        at: this.lastRound.at,
       };
       return;
     }
@@ -492,6 +508,40 @@ export class UsageStatsService extends TypertRemoteService {
     round.cacheReadTokens += cacheRead;
     round.cacheWriteTokens += cacheWrite;
     round.at = typeof event.time === "number" ? event.time : Date.now();
+
+    // 服务商分类：zai/glm/bigmodel → 套餐；deepseek* → 按量计费（拆账累计）。
+    const prov = String((src && src.provider) || "").toLowerCase();
+    const isDeepseek = prov.includes("deepseek");
+    if (isDeepseek) {
+      this.dsUsage.inputTokens += input;
+      this.dsUsage.outputTokens += output;
+      this.dsUsage.cacheReadTokens += cacheRead;
+      this.dsUsage.cacheWriteTokens += cacheWrite;
+
+      const dsHour = this.dsUsageByHour[hour] || (this.dsUsageByHour[hour] = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      dsHour.inputTokens += input;
+      dsHour.outputTokens += output;
+      dsHour.cacheReadTokens += cacheRead;
+      dsHour.cacheWriteTokens += cacheWrite;
+
+      const ds = this.lastRoundDs || (this.lastRoundDs = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        at: round.at,
+      });
+      ds.inputTokens += input;
+      ds.outputTokens += output;
+      ds.cacheReadTokens += cacheRead;
+      ds.cacheWriteTokens += cacheWrite;
+      ds.at = round.at;
+    }
   }
 
   /** The synced price entry used for the estimate, or null. */
@@ -505,7 +555,7 @@ export class UsageStatsService extends TypertRemoteService {
     const synced = this.syncedEstimateEntry();
     if (synced) {
       let amount = 0;
-      for (const [hourStr, bucket] of Object.entries(this.usageByHour)) {
+      for (const [hourStr, bucket] of Object.entries(this.dsUsageByHour)) {
         const hour = Number(hourStr);
         const rate = this.rateForHour(synced, hour);
         amount +=
@@ -518,10 +568,10 @@ export class UsageStatsService extends TypertRemoteService {
     const p = this.pricing;
     if (!p) return null;
     const amount =
-      (this.usage.inputTokens / 1e6) * (p.input ?? 0) +
-      (this.usage.outputTokens / 1e6) * (p.output ?? 0) +
-      (this.usage.cacheReadTokens / 1e6) * (p.cacheRead ?? 0) +
-      (this.usage.cacheWriteTokens / 1e6) * (p.cacheWrite ?? 0);
+      (this.dsUsage.inputTokens / 1e6) * (p.input ?? 0) +
+      (this.dsUsage.outputTokens / 1e6) * (p.output ?? 0) +
+      (this.dsUsage.cacheReadTokens / 1e6) * (p.cacheRead ?? 0) +
+      (this.dsUsage.cacheWriteTokens / 1e6) * (p.cacheWrite ?? 0);
     return { currency: p.currency ?? "CNY", amount: round2(amount) };
   }
 
@@ -576,18 +626,25 @@ export class UsageStatsService extends TypertRemoteService {
     if (!round) return null;
     const entry = this.syncedEstimateEntry();
     if (!entry) return null;
+    // 只按本轮 DeepSeek 系调用计费（GLM 套餐内调用不产生按量费用）。
+    const ds = this.lastRoundDs || {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
     const hour = new Date(round.at).getUTCHours();
     const rate = this.rateForHour(entry, hour);
-    // 真实计费口径：本轮全部模型调用 —— 新输入(缓存未命中+写) + 历史上下文重读
-    // (cacheRead，DeepSeek 每轮都按缓存命中价收) + 输出。
     const usd =
-      ((round.inputTokens + round.cacheWriteTokens) / 1e6) * (rate.cacheMiss ?? 0) +
-      (round.cacheReadTokens / 1e6) * (rate.cacheHit ?? rate.cacheMiss ?? 0) +
-      (round.outputTokens / 1e6) * (rate.output ?? 0);
+      ((ds.inputTokens + ds.cacheWriteTokens) / 1e6) * (rate.cacheMiss ?? 0) +
+      (ds.cacheReadTokens / 1e6) * (rate.cacheHit ?? rate.cacheMiss ?? 0) +
+      (ds.outputTokens / 1e6) * (rate.output ?? 0);
     return {
       currency: "USD",
       usdAmount: round2(usd),
       cnyAmount: round2(usd * this.usdToCnyRate),
+      dsTokens:
+        ds.inputTokens + ds.outputTokens + ds.cacheReadTokens + ds.cacheWriteTokens,
     };
   }
 
