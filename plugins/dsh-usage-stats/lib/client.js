@@ -163,6 +163,14 @@ window.__ModuleLoader__.load({
       return Math.max(0, Math.min(100, Math.round(100 - (Number(item.percentage) || 0))));
     }
 
+    /** 两个窗口里剩余更紧的那个（窄侧栏只放一个圆环时用）。 */
+    function worstQuotaItem(q) {
+      if (!q) return null;
+      if (!q.fiveHour) return q.weekly || null;
+      if (!q.weekly) return q.fiveHour;
+      return remainingPct(q.fiveHour) <= remainingPct(q.weekly) ? q.fiveHour : q.weekly;
+    }
+
     /** 颜色按“剩余”判断：绿=余量充足，剩得少才告警（≤30% 琥珀，≤10% 红）。 */
     function quotaColor(remaining) {
       if (remaining <= 10) return "#d64545";
@@ -308,8 +316,9 @@ window.__ModuleLoader__.load({
             onMouseEnter: onEnter,
             onMouseLeave: onLeave,
           },
-          React.createElement("div", { className: "usage-stats-pop-title" }, plan ? "用量与配额" : "用量与余额"),
-        q && plan
+          React.createElement("div", { className: "usage-stats-pop-title" }, "余额 · 配额 · 用量"),
+        // —— GLM 套餐配额（有数据就显示，不再依赖“当前用谁”的判断）——
+        q
           ? React.createElement(
               "div",
               { className: "usage-stats-qbars" },
@@ -321,7 +330,7 @@ window.__ModuleLoader__.load({
                 q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
             )
           : null,
-        q && plan
+        q
           ? [
               q.level ? popRow("套餐档位", q.level) : null,
               q.fiveHour && q.fiveHour.resetAt != null
@@ -332,16 +341,13 @@ window.__ModuleLoader__.load({
                 : null,
             ].filter(Boolean)
           : null,
-        q && plan ? React.createElement("div", { className: "usage-stats-pop-divider" }) : null,
-        plan
-          ? balance != null
-            ? popRow("DeepSeek 钱包", balance)
-            : null
-          : React.createElement(
-              "div",
-              { className: "usage-stats-pop-balance" },
-              balance != null ? balance : "获取中…",
-            ),
+        q ? React.createElement("div", { className: "usage-stats-pop-divider" }) : null,
+        // —— DeepSeek 钱包（始终显示）——
+        React.createElement(
+          "div",
+          { className: "usage-stats-pop-balance" },
+          balance != null ? balance : "获取中…",
+        ),
         snapshot.balance && snapshot.balance.infos
           ? snapshot.balance.infos.map((info) =>
               React.createElement(
@@ -379,55 +385,38 @@ window.__ModuleLoader__.load({
             )
           : null,
         React.createElement("div", { className: "usage-stats-pop-divider" }),
-        plan
-          ? popRow("计费方式", "GLM Coding Plan（订阅制，无按量费用）")
-          : React.createElement(
-              "div",
-              { className: "usage-stats-pop-row" },
-              React.createElement("span", { className: "usage-stats-k" }, "预估费用"),
-              React.createElement(
-                "span",
-                { className: "usage-stats-v" },
-                cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
-              ),
-            ),
-        !plan && lastRound && lastRound.cost
+        // 按量费用只统计 DeepSeek 系调用（宿主已按服务商拆账），显示始终有意义。
+        React.createElement(
+          "div",
+          { className: "usage-stats-pop-row" },
+          React.createElement("span", { className: "usage-stats-k" }, "按量费用（DeepSeek）"),
+          React.createElement(
+            "span",
+            { className: "usage-stats-v" },
+            cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
+          ),
+        ),
+        lastRound && lastRound.cost
           ? React.createElement(
               "div",
               { className: "usage-stats-pop-row" },
-              React.createElement("span", { className: "usage-stats-k" }, "上一轮"),
+              React.createElement("span", { className: "usage-stats-k" }, "上一轮计费"),
               React.createElement(
                 "span",
                 { className: "usage-stats-v" },
-                `¥${lastRound.cost.cnyAmount.toFixed(2)}`,
+                `¥${lastRound.cost.cnyAmount.toFixed(2)}` +
+                  (lastRound.cost.dsTokens
+                    ? `（${formatTokens(lastRound.cost.dsTokens)} tokens）`
+                    : ""),
               ),
             )
           : null,
-        snapshot.zaiQuotaError && plan
+        snapshot.zaiQuotaError
           ? React.createElement(
               "div",
               { className: "usage-stats-error" },
               `GLM 配额获取失败：${snapshot.zaiQuotaError.message}`,
             )
-          : null,
-        // 非 GLM 模式下仍展示套餐余量作参考（灰置顶提示，不影响主信息）。
-        q && !plan
-          ? [
-              React.createElement("div", { key: "qdiv", className: "usage-stats-pop-divider" }),
-              React.createElement(
-                "div",
-                { key: "qtitle", className: "usage-stats-k" },
-                "GLM 配额（当前未使用）",
-              ),
-              React.createElement(
-                "div",
-                { key: "qbars", className: "usage-stats-qbars" },
-                QuotaBar("5h 窗口", q.fiveHour,
-                  q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
-                QuotaBar("周配额", q.weekly,
-                  q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
-              ),
-            ]
           : null,
         React.createElement(
           "div",
@@ -525,19 +514,20 @@ window.__ModuleLoader__.load({
       const q = quotaOf(snapshot);
       const qtext = quotaText(snapshot);
       const plan = onPlan(snapshot);
-      // 只有当前真的跑在 GLM（订阅制）上才显示配额圆环；切回 DeepSeek 则恢复余额显示。
-      const showQuota = plan && qtext != null;
+      // 余额与配额并排显示，不再依赖“当前用谁”的判断（切换信号不可靠）。
+      const showQuota = qtext != null;
       const label =
-        showQuota
-          ? qtext
-          : text != null
-            ? text
+        text != null
+          ? text
+          : showQuota
+            ? qtext
             : failed
               ? (errMsg || "获取失败")
               : "加载中…";
       const lastRound = snapshot ? snapshot.lastRound : null;
+      // 按量费用已按服务商拆账：GLM 轮次为 0，只有 >0 才显示后缀，避免噪音。
       const lastCostSuffix =
-        !plan && lastRound && lastRound.cost
+        lastRound && lastRound.cost && lastRound.cost.cnyAmount > 0
           ? `（-¥${lastRound.cost.cnyAmount.toFixed(2)}）`
           : "";
 
@@ -583,7 +573,9 @@ window.__ModuleLoader__.load({
             ref: pillRef,
             type: "button",
             className: "usage-stats-pill" + (wide ? "" : " usage-stats-rail"),
-            "aria-label": showQuota ? `GLM 配额 ${qtext}` : text ? `余额 ${text}` : "用量与余额",
+            "aria-label":
+              (text != null ? `余额 ${text}` : "") +
+              (showQuota ? ` · GLM 配额 ${qtext}` : "") || "用量与余额",
             onClick: () => {
               try {
                 window.open(topUpUrlOf(snapshot), "_blank", "noopener");
@@ -592,16 +584,18 @@ window.__ModuleLoader__.load({
               }
             },
           },
-          showQuota
+          // 窄（折叠）侧栏空间只够一个元素：优先放最紧的配额圆环，否则 ¥。
+          !wide && showQuota
             ? React.createElement(
                 "span",
                 { className: "usage-stats-quota" },
-                QuotaRing(q.fiveHour, wide ? "5h" : null, wide ? 22 : 18),
-                wide && q.weekly ? QuotaRing(q.weekly, "周", 22) : null,
+                QuotaRing(worstQuotaItem(q), null, 18),
               )
             : [
-                React.createElement("span", { className: "usage-stats-coin" }, "¥"),
-                wide
+                text != null
+                  ? React.createElement("span", { className: "usage-stats-coin" }, "¥")
+                  : null,
+                wide && text != null
                   ? React.createElement(
                       "span",
                       { className: "usage-stats-label" },
@@ -609,6 +603,14 @@ window.__ModuleLoader__.load({
                       lastCostSuffix
                         ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
                         : null,
+                    )
+                  : null,
+                wide && showQuota
+                  ? React.createElement(
+                      "span",
+                      { className: "usage-stats-quota" },
+                      QuotaRing(q.fiveHour, "5h", 22),
+                      q.weekly ? QuotaRing(q.weekly, "周", 22) : null,
                     )
                   : null,
               ],
@@ -684,12 +686,10 @@ window.__ModuleLoader__.load({
         ["缓存写 tokens", usage ? formatTokens(usage.cacheWriteTokens) : "—"],
         ["合计 tokens", usage ? formatTokens(usage.totalTokens) : "—"],
         ["缓存命中率", usage ? formatRate(usage.cacheHitRate) : "—"],
-        plan
-          ? ["计费方式", "GLM Coding Plan（订阅制，无按量费用）"]
-          : [
-              "预估费用",
-              cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "（未配置价格表）",
-            ],
+        [
+          "按量费用（仅 DeepSeek 调用）",
+          cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "（未配置价格表）",
+        ],
         ["最后刷新", timeText(snapshot && snapshot.lastRefresh)],
       ];
 
@@ -702,9 +702,9 @@ window.__ModuleLoader__.load({
           React.createElement(
             "div",
             { className: "usage-stats-k" },
-            plan && q ? "GLM Coding Plan 配额" : "账户余额",
+            "GLM Coding Plan 配额",
           ),
-          plan && q
+          q
             ? React.createElement(
                 "div",
                 { className: "usage-stats-qbars" },
@@ -717,10 +717,12 @@ window.__ModuleLoader__.load({
               )
             : React.createElement(
                 "div",
-                { className: "usage-stats-balance" },
-                balance != null ? balance : "—",
+                { className: "usage-stats-k" },
+                snapshot && snapshot.zaiQuotaError
+                  ? `获取失败：${snapshot.zaiQuotaError.message}`
+                  : "未获取到配额（未配置 ZAI_API_KEY？）",
               ),
-          plan && q
+          q
             ? [
                 q.level ? ["套餐档位", q.level] : null,
                 q.fiveHour && q.fiveHour.resetAt != null
@@ -729,7 +731,6 @@ window.__ModuleLoader__.load({
                 q.weekly && q.weekly.resetAt != null
                   ? ["周配额重置", timeText(q.weekly.resetAt)]
                   : null,
-                balance != null ? ["DeepSeek 钱包", balance] : null,
               ]
                 .filter(Boolean)
                 .map(([k, v]) =>
@@ -741,7 +742,21 @@ window.__ModuleLoader__.load({
                   ),
                 )
             : null,
-          !plan && snapshot && snapshot.balance && snapshot.balance.infos
+        ),
+        React.createElement(
+          "div",
+          { className: "usage-stats-card" },
+          React.createElement(
+            "div",
+            { className: "usage-stats-k" },
+            "DeepSeek 账户余额",
+          ),
+          React.createElement(
+            "div",
+            { className: "usage-stats-balance" },
+            balance != null ? balance : "—",
+          ),
+          snapshot && snapshot.balance && snapshot.balance.infos
             ? snapshot.balance.infos.map((info) =>
                 React.createElement(
                   "div",
@@ -758,20 +773,6 @@ window.__ModuleLoader__.load({
                   ),
                 ),
               )
-            : null,
-          !plan && q
-            ? [
-                React.createElement("div", { key: "gq-k", className: "usage-stats-k", style: { marginTop: 12 } },
-                  "GLM 配额（当前未使用）"),
-                React.createElement(
-                  "div",
-                  { key: "gq-bars", className: "usage-stats-qbars" },
-                  QuotaBar("5h 窗口", q.fiveHour,
-                    q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
-                  QuotaBar("周配额", q.weekly,
-                    q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
-                ),
-              ]
             : null,
           snapshot && snapshot.error
             ? React.createElement(
