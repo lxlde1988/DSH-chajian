@@ -14,24 +14,45 @@ DeepSeek Harness · 个人习惯与插件备份
 
 ```
 DSH-chajian/
-├── plugins/                  # 自定义插件（源码/已构建）
+├── plugins/                  # 自定义插件（源码/已构建，install/backup 自动枚举全部）
 │   ├── dsh-usage-stats/      # 用量/余额/一键充值/重启插件（本仓库自研）
-│   └── dsh-worktable/        # 第三方面板插件（来自 Aisland-SJL/dsh-worktable）
+│   ├── dsh-worktable/        # 第三方面板插件（来自 Aisland-SJL/dsh-worktable，**已打补丁**，见下）
+│   └── dsh-github-sync/      # GitHub 备份同步插件（自动把本机状态推到本仓库）
 ├── config/
 │   └── web/
-│       ├── cordis.patch.yml  # 决定加载哪些插件（usage-stats / dsh-worktable）
+│       ├── cordis.patch.yml  # 决定加载哪些插件（自动枚举出的全部插件）
 │       ├── cordis.yml
 │       ├── package.json
 │       └── pnpm-workspace.yaml
 ├── settings/
 │   └── settings.yaml         # 使用习惯：默认模型、reasoningEffort、模型列表等
 ├── scripts/
-│   ├── install.ps1           # 在家/新电脑：把仓库内容装到本机 .dsh
-│   └── backup.ps1            # 在常用电脑：把本机最新状态收集回仓库
+│   ├── install.ps1           # 在家/新电脑：把仓库内容装到本机 .dsh（自动枚举 plugins\*）
+│   ├── backup.ps1            # 在常用电脑：把本机最新状态收集回仓库（自动枚举 dsh-*）
+│   ├── push-via-api.ps1      # github.com 被阻断时的 API 推送包装
+│   └── push-via-api.mjs      # 走 api.github.com 的推送实现
 ├── 启动DSH.bat                # 一键启动 DSH
 ├── .credentials.example.yaml # 密钥模板（不含真实密钥，仅在 .credentials.yaml 里）
 └── .gitignore
 ```
+
+### 本仓库的 dsh-worktable 补丁说明
+
+仓库里的 dsh-worktable 在官方发布包基础上打了这些补丁（`install.ps1` 装上即带）：
+
+1. **服务端新增常驻搜索端点**（`lib/index.js`）：
+   - `GET /api/worktable/searchrelay?kw=&domain=` — 360/Bing 站内搜索兜底
+   - `GET /api/worktable/xhssearch?kw=` — 调用本机已登录的 `xhs` CLI（小红书官方数据）
+   - `GET /api/worktable/twittersearch?kw=` — 调用本机已登录的 `twitter` CLI（X 官方数据，凭据经 `_tools/twitter_auth.json` 或环境变量）
+   - CLI 路径自动探测（Python310–313），跨机器可用
+2. **分屏稳定性修复**（`lib/client.js`）：
+   - `yieldObserver` 边距被外层 React 重渲染冲掉时**自愈写回**而不是误关分屏（修「打字/拖分隔条就跳回控制室」）
+   - 输入框内按 Esc 不再关闭分屏（含输入法合成态保护）
+   - 会话切换不再自动关闭分屏；停用 `.ta_split` 全局观察器误关
+   - `close()` 加诊断日志（控制台 `[worktable] split close triggered` + 调用栈）
+
+> 搜索台页面（窗口1/窗口2）与中继在另一个仓库 **X-Cli**（多平台搜索台），两者配合使用；
+> X-Cli 的 `setup/` 里也留了一份插件补丁作为兜底。
 
 ---
 
@@ -107,4 +128,7 @@ git pull
 
 - **dsh-usage-stats**（本仓库自研）：在侧边栏显示余额/费用（本轮扣费）、弹出详情、一键充值、一键重启。
   定价表从 DeepSeek 官方价目页自动同步。
-- **dsh-worktable**（第三方）：来自 <https://github.com/Aisland-SJL/dsh-worktable>（发布包）。升级可去原仓库。
+- **dsh-worktable**（第三方）：来自 <https://github.com/Aisland-SJL/dsh-worktable>（发布包）。
+  **注意：本仓库版本已打补丁**（常驻搜索端点 + 分屏稳定性修复，见上方「补丁说明」）。
+  若从原仓库升级，会**丢掉补丁**——升级后请重跑 X-Cli 仓库的 `setup\patch-plugin.ps1`。
+- **dsh-github-sync**（自研）：自动把本机 DSH 状态同步/备份到 GitHub（生成「DSH同步: …」提交）。

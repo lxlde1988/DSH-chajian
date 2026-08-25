@@ -17,6 +17,8 @@
  */
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 const DEFAULTS = {
   apiKeyEnv: "DEEPSEEK_API_KEY",
@@ -36,6 +38,10 @@ const DEFAULTS = {
   // Static fallback price table (per 1M tokens) used when auto-sync is
   // disabled or the page cannot be parsed.
   pricing: null,
+  // Z.ai（智谱）Coding Plan：订阅制没有按量余额，改查服务端配额窗口
+  // （5 小时 token 窗口 / 周配额 / 工具搜索额度），Bearer 同一个 API key。
+  zaiApiKeyEnv: "ZAI_API_KEY",
+  zaiQuotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
 };
 
 /**
@@ -386,6 +392,8 @@ export class UsageStatsService extends TypertRemoteService {
     this.estimateModel = config.estimateModel ?? DEFAULTS.estimateModel;
     this.usdToCnyRate = config.usdToCnyRate ?? DEFAULTS.usdToCnyRate;
     this.pricing = config.pricing ?? null;
+    this.zaiApiKeyEnv = config.zaiApiKeyEnv ?? DEFAULTS.zaiApiKeyEnv;
+    this.zaiQuotaUrl = config.zaiQuotaUrl ?? DEFAULTS.zaiQuotaUrl;
 
     this.usage = {
       inputTokens: 0,
@@ -394,7 +402,16 @@ export class UsageStatsService extends TypertRemoteService {
       cacheWriteTokens: 0,
     };
     this.usageByHour = {};
+    // 按服务商拆账：只有 DeepSeek 系调用计入“按量费用”（GLM 走套餐、不按量计费）。
+    this.dsUsage = {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    this.dsUsageByHour = {};
     this.lastRound = null; // 最近一轮：user/message 重置，后续 assistant/message 累计
+    this.lastRoundDs = null; // 本轮中 DeepSeek 系调用的部分（用于本轮费用）
     this.balance = null;
     this.lastRefresh = null;
     this.lastError = null;
@@ -404,15 +421,21 @@ export class UsageStatsService extends TypertRemoteService {
     this.pricingSyncError = null;
     this.pricingSyncing = null;
 
+    this.zaiQuota = null; // { level, fiveHour, weekly, tools, fetchedAt }
+    this.zaiQuotaError = null;
+    this.sessionModel = null; // 最近一次实际调用的 { provider, model, at }
+
     ctx.on("session/event", (session, event) => this.foldEvent(event));
 
     ctx.interval(() => {
       this.refresh().catch(() => {});
       this.syncPricing().catch(() => {});
+      this.fetchZaiQuota().catch(() => {});
     }, this.refreshIntervalMs);
 
     this.refresh().catch(() => {});
     this.syncPricing().catch(() => {});
+    this.fetchZaiQuota().catch(() => {});
   }
 
   foldEvent(event) {
@@ -428,9 +451,26 @@ export class UsageStatsService extends TypertRemoteService {
         cacheWriteTokens: 0,
         at: typeof event.time === "number" ? event.time : Date.now(),
       };
+      this.lastRoundDs = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        at: this.lastRound.at,
+      };
       return;
     }
     if (event.type !== "assistant/message") return;
+    // 记录本会话最近一次实际调用的模型（assistant/message 带 message.source），
+    // 作为 settings.yaml 缺失/未切换时的兜底信号。
+    const src = event.data && event.data.message && event.data.message.source;
+    if (src && (src.provider || src.model)) {
+      this.sessionModel = {
+        provider: src.provider || null,
+        model: src.model || null,
+        at: typeof event.time === "number" ? event.time : Date.now(),
+      };
+    }
     const usage = event.data && event.data.usage;
     if (!usage) return;
     const input = usage.inputTokens ?? 0;
@@ -468,6 +508,40 @@ export class UsageStatsService extends TypertRemoteService {
     round.cacheReadTokens += cacheRead;
     round.cacheWriteTokens += cacheWrite;
     round.at = typeof event.time === "number" ? event.time : Date.now();
+
+    // 服务商分类：zai/glm/bigmodel → 套餐；deepseek* → 按量计费（拆账累计）。
+    const prov = String((src && src.provider) || "").toLowerCase();
+    const isDeepseek = prov.includes("deepseek");
+    if (isDeepseek) {
+      this.dsUsage.inputTokens += input;
+      this.dsUsage.outputTokens += output;
+      this.dsUsage.cacheReadTokens += cacheRead;
+      this.dsUsage.cacheWriteTokens += cacheWrite;
+
+      const dsHour = this.dsUsageByHour[hour] || (this.dsUsageByHour[hour] = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+      });
+      dsHour.inputTokens += input;
+      dsHour.outputTokens += output;
+      dsHour.cacheReadTokens += cacheRead;
+      dsHour.cacheWriteTokens += cacheWrite;
+
+      const ds = this.lastRoundDs || (this.lastRoundDs = {
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        at: round.at,
+      });
+      ds.inputTokens += input;
+      ds.outputTokens += output;
+      ds.cacheReadTokens += cacheRead;
+      ds.cacheWriteTokens += cacheWrite;
+      ds.at = round.at;
+    }
   }
 
   /** The synced price entry used for the estimate, or null. */
@@ -481,7 +555,7 @@ export class UsageStatsService extends TypertRemoteService {
     const synced = this.syncedEstimateEntry();
     if (synced) {
       let amount = 0;
-      for (const [hourStr, bucket] of Object.entries(this.usageByHour)) {
+      for (const [hourStr, bucket] of Object.entries(this.dsUsageByHour)) {
         const hour = Number(hourStr);
         const rate = this.rateForHour(synced, hour);
         amount +=
@@ -494,10 +568,10 @@ export class UsageStatsService extends TypertRemoteService {
     const p = this.pricing;
     if (!p) return null;
     const amount =
-      (this.usage.inputTokens / 1e6) * (p.input ?? 0) +
-      (this.usage.outputTokens / 1e6) * (p.output ?? 0) +
-      (this.usage.cacheReadTokens / 1e6) * (p.cacheRead ?? 0) +
-      (this.usage.cacheWriteTokens / 1e6) * (p.cacheWrite ?? 0);
+      (this.dsUsage.inputTokens / 1e6) * (p.input ?? 0) +
+      (this.dsUsage.outputTokens / 1e6) * (p.output ?? 0) +
+      (this.dsUsage.cacheReadTokens / 1e6) * (p.cacheRead ?? 0) +
+      (this.dsUsage.cacheWriteTokens / 1e6) * (p.cacheWrite ?? 0);
     return { currency: p.currency ?? "CNY", amount: round2(amount) };
   }
 
@@ -552,19 +626,95 @@ export class UsageStatsService extends TypertRemoteService {
     if (!round) return null;
     const entry = this.syncedEstimateEntry();
     if (!entry) return null;
+    // 只按本轮 DeepSeek 系调用计费（GLM 套餐内调用不产生按量费用）。
+    const ds = this.lastRoundDs || {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
     const hour = new Date(round.at).getUTCHours();
     const rate = this.rateForHour(entry, hour);
-    // 真实计费口径：本轮全部模型调用 —— 新输入(缓存未命中+写) + 历史上下文重读
-    // (cacheRead，DeepSeek 每轮都按缓存命中价收) + 输出。
     const usd =
-      ((round.inputTokens + round.cacheWriteTokens) / 1e6) * (rate.cacheMiss ?? 0) +
-      (round.cacheReadTokens / 1e6) * (rate.cacheHit ?? rate.cacheMiss ?? 0) +
-      (round.outputTokens / 1e6) * (rate.output ?? 0);
+      ((ds.inputTokens + ds.cacheWriteTokens) / 1e6) * (rate.cacheMiss ?? 0) +
+      (ds.cacheReadTokens / 1e6) * (rate.cacheHit ?? rate.cacheMiss ?? 0) +
+      (ds.outputTokens / 1e6) * (rate.output ?? 0);
     return {
       currency: "USD",
       usdAmount: round2(usd),
       cnyAmount: round2(usd * this.usdToCnyRate),
+      dsTokens:
+        ds.inputTokens + ds.outputTokens + ds.cacheReadTokens + ds.cacheWriteTokens,
     };
+  }
+
+  /** 当前 agent 默认模型（读 ~/.dsh/settings.yaml，用于判断按套餐还是按量展示）。 */
+  agentModel() {
+    try {
+      const raw = readFileSync(
+        path.join(process.env.USERPROFILE || process.env.HOME || ".", ".dsh", "settings.yaml"),
+        "utf8",
+      );
+      const provider = (raw.match(/^\s*provider:\s*(\S+)/m) || [])[1] || null;
+      const model = (raw.match(/^\s*model:\s*(\S+)/m) || [])[1] || null;
+      if (provider || model) return { provider, model, source: "settings" };
+    } catch {
+      /* settings 不可读时落到会话兜底 */
+    }
+    if (this.sessionModel) return { ...this.sessionModel, source: "session" };
+    return { provider: null, model: null, source: null };
+  }
+
+  /**
+   * 拉取 Z.ai（智谱）Coding Plan 服务端配额：
+   * TOKENS_LIMIT unit=3 → 5 小时 token 窗口；unit=6 → 周配额；
+   * TIME_LIMIT unit=5 → 工具/搜索额度（月度）。均为 percentage + nextResetTime。
+   */
+  async fetchZaiQuota() {
+    try {
+      const resolved = await this.ctx.credentials.resolve(credentialRef(this.zaiApiKeyEnv));
+      if (!resolved) {
+        this.zaiQuotaError = { code: "NO_CREDENTIAL", message: `未配置凭据 ${this.zaiApiKeyEnv}` };
+        return;
+      }
+      const response = await fetch(this.zaiQuotaUrl, {
+        headers: { Authorization: `Bearer ${resolved.value}`, Accept: "application/json" },
+      });
+      if (!response.ok) {
+        this.zaiQuotaError = { code: "HTTP_ERROR", message: `配额接口返回 HTTP ${response.status}` };
+        return;
+      }
+      const body = await response.json();
+      const data = body && body.data;
+      const limits = data && Array.isArray(data.limits) ? data.limits : [];
+      let fiveHour = null;
+      let weekly = null;
+      let tools = null;
+      for (const lim of limits) {
+        const pct = Number(lim.percentage) || 0;
+        const resetAt = typeof lim.nextResetTime === "number" ? lim.nextResetTime : null;
+        if (lim.type === "TOKENS_LIMIT" && lim.unit === 3 && !fiveHour) {
+          fiveHour = { percentage: pct, resetAt };
+        } else if (lim.type === "TOKENS_LIMIT" && lim.unit === 6 && !weekly) {
+          weekly = { percentage: pct, resetAt };
+        } else if (lim.type === "TIME_LIMIT" && lim.unit === 5 && !tools) {
+          tools = { percentage: pct, remaining: typeof lim.remaining === "number" ? lim.remaining : null, resetAt };
+        }
+      }
+      this.zaiQuota = {
+        level: (data && data.level) || null,
+        fiveHour,
+        weekly,
+        tools,
+        fetchedAt: Date.now(),
+      };
+      this.zaiQuotaError = null;
+    } catch (error) {
+      this.zaiQuotaError = {
+        code: "FETCH_ERROR",
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   snapshot() {
@@ -594,6 +744,9 @@ export class UsageStatsService extends TypertRemoteService {
           }
         : null,
       pricing: this.pricingState(),
+      zaiQuota: this.zaiQuota,
+      zaiQuotaError: this.zaiQuotaError,
+      agent: this.agentModel(),
       lastRefresh: this.lastRefresh,
       error: this.lastError,
       topUpUrl: this.topUpUrl,

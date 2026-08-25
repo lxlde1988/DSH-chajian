@@ -1,7 +1,7 @@
 {
-  "name": "dsh-usage-stats",
-  "description": "DeepSeek Harness usage & balance plugin: real-time account balance, token usage statistics, and one-click top-up.",
-  "version": "0.1.6",
+  "name": "dsh-github-sync",
+  "description": "One-click backup of DSH plugins, config, and usage habits to GitHub via the Contents API (works even when git-over-github.com is blocked).",
+  "version": "0.1.0",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
@@ -24,7 +24,6 @@
         "@deepseek-ai/dsh-client-web-react",
         "@deepseek-ai/dsh-client-runtime",
         "@deepseek-ai/dsh-api-gateway",
-        "@deepseek-ai/dsh-client-ui-sidebar",
         "@deepseek-ai/dsh-client-ui-settings-general"
       ]
     }
@@ -35,7 +34,6 @@
     "lib/types/**/*.d.ts"
   ],
   "dependencies": {
-    "@deepseek-ai/dsh-credentials": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-typert-protocol": "^0.1.0-rc.6"
   },
   "peerDependencies": {

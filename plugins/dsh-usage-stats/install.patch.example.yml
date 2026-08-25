@@ -27,9 +27,6 @@
         pricingSource: https://api-docs.deepseek.com/quick_start/pricing/
         # Model whose synced price is used for the flat cost estimate.
         estimateModel: deepseek-v4-pro
-        # USD→CNY rate used to convert the USD price-table estimate to the CNY
-        # figure shown beside the (CNY) balance. Adjust to your billing rate.
-        usdToCnyRate: 7.2
 
         # Static fallback (per 1M tokens, CNY) used only when auto-sync is
         # disabled or the page cannot be parsed. Keep null to rely on auto-sync.

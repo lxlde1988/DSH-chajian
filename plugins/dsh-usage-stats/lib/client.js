@@ -26,6 +26,26 @@ window.__ModuleLoader__.load({
 .usage-stats-pill:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06))}
 .usage-stats-pill.usage-stats-rail{border-radius:50%;justify-content:center;width:36px;height:36px;padding:0}
 .usage-stats-coin{font-weight:600;line-height:1}
+.usage-stats-quota{display:inline-flex;align-items:center;gap:10px;padding:0 2px}
+.usage-stats-qring{display:inline-flex;flex-direction:column;align-items:center;gap:2px;line-height:1}
+.usage-stats-qring svg{display:block}
+.usage-stats-qring-cap{font-size:9px;line-height:1;color:var(--dsw-alias-label-secondary,#888);letter-spacing:.02em}
+.usage-stats-qbar{display:flex;align-items:center;gap:8px;margin:2px 0}
+.usage-stats-qbar-label{flex:0 0 64px;font-size:12px;color:var(--dsw-alias-label-secondary,#666);white-space:nowrap}
+.usage-stats-qbar-track{flex:1;height:6px;border-radius:3px;background:rgba(128,128,128,.18);overflow:hidden;min-width:0}
+.usage-stats-qbar-fill{display:block;height:100%;border-radius:3px;transition:width .3s ease}
+.usage-stats-qbar-val{flex:0 0 52px;text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.usage-stats-qbars{display:flex;flex-direction:column;gap:8px;margin:4px 0}
+.usage-stats-pill:not(.usage-stats-rail){width:100%}
+.usage-stats-mode-toggle{flex:0 0 auto;margin-left:auto;padding:3px 5px;border-radius:8px;font-size:12px;line-height:1;
+  color:var(--dsw-alias-label-secondary,#999);cursor:pointer;user-select:none}
+.usage-stats-mode-toggle:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.09));color:var(--dsw-alias-label-primary,#333)}
+.usage-stats-mode-seg{display:flex;gap:6px;margin-bottom:4px}
+.usage-stats-mode-btn{flex:1;cursor:pointer;border:1px solid var(--dsw-alias-border,rgba(0,0,0,.15));background:transparent;
+  color:var(--dsw-alias-label-secondary,#666);border-radius:8px;padding:4px 0;font-family:inherit;font-size:12px;line-height:16px}
+.usage-stats-mode-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(0,0,0,.06))}
+.usage-stats-mode-btn.usage-stats-on{background:var(--dsw-alias-interactive-bg-active,#eef2ff);
+  color:var(--dsw-alias-label-primary,#333);border-color:transparent;font-weight:600}
 .usage-stats-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;line-height:20px}
 .usage-stats-lines{display:flex;flex-direction:column;min-width:0}
 .usage-stats-sublabel{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:16px;color:var(--dsw-alias-label-secondary,#888)}
@@ -133,6 +153,155 @@ window.__ModuleLoader__.load({
       return (snapshot && snapshot.topUpUrl) || DEFAULT_TOP_UP_URL;
     }
 
+    // ------------------------------------------------------ GLM plan quota --
+    function quotaOf(snapshot) {
+      return (snapshot && snapshot.zaiQuota) || null;
+    }
+
+    function quotaText(snapshot) {
+      const q = quotaOf(snapshot);
+      if (!q) return null;
+      const parts = [];
+      if (q.fiveHour) parts.push(`5h 剩 ${remainingPct(q.fiveHour)}%`);
+      if (q.weekly) parts.push(`周 剩 ${remainingPct(q.weekly)}%`);
+      return parts.length ? parts.join(" · ") : null;
+    }
+
+    /** 剩余百分比：接口的 percentage 是“已用”，显示取 100-已用。 */
+    function remainingPct(item) {
+      if (!item) return 0;
+      return Math.max(0, Math.min(100, Math.round(100 - (Number(item.percentage) || 0))));
+    }
+
+    /** 两个窗口里剩余更紧的那个（窄侧栏只放一个圆环时用）。 */
+    function worstQuotaItem(q) {
+      if (!q) return null;
+      if (!q.fiveHour) return q.weekly || null;
+      if (!q.weekly) return q.fiveHour;
+      return remainingPct(q.fiveHour) <= remainingPct(q.weekly) ? q.fiveHour : q.weekly;
+    }
+
+    /** 颜色按“剩余”判断：绿=余量充足，剩得少才告警（≤30% 琥珀，≤10% 红）。 */
+    function quotaColor(remaining) {
+      if (remaining <= 10) return "#d64545";
+      if (remaining <= 30) return "#b8860b";
+      return "#2e7d32";
+    }
+
+    /** 圆环（药丸内）：绿色弧=剩余，灰色底轨=已用，底部小标注。 */
+    function QuotaRing(item, caption, size = 22) {
+      if (!item) return null;
+      const rem = remainingPct(item);
+      const used = 100 - rem;
+      const stroke = size >= 24 ? 4 : 3;
+      const r = (size - stroke) / 2;
+      const c = 2 * Math.PI * r;
+      const dash = (rem / 100) * c;
+      const color = quotaColor(rem);
+      return React.createElement(
+        "span",
+        {
+          className: "usage-stats-qring",
+          title: `${caption} 剩余 ${rem}%（已用 ${used}%）`,
+        },
+        React.createElement(
+          "svg",
+          {
+            width: size,
+            height: size,
+            viewBox: `0 0 ${size} ${size}`,
+            "aria-hidden": true,
+            focusable: "false",
+          },
+          React.createElement("circle", {
+            cx: size / 2,
+            cy: size / 2,
+            r,
+            fill: "none",
+            // 灰色底轨代表“已用”
+            stroke: "#9aa0a6",
+            strokeOpacity: 0.45,
+            strokeWidth: stroke,
+          }),
+          React.createElement("circle", {
+            cx: size / 2,
+            cy: size / 2,
+            r,
+            fill: "none",
+            stroke: color,
+            strokeWidth: stroke,
+            strokeLinecap: "round",
+            strokeDasharray: `${dash} ${c - dash}`,
+            transform: `rotate(-90 ${size / 2} ${size / 2})`,
+          }),
+        ),
+        caption
+          ? React.createElement("span", { className: "usage-stats-qring-cap" }, caption)
+          : null,
+      );
+    }
+
+    /** 进度条（弹窗/设置面板）：绿色填充=剩余，灰色轨道=已用，右侧显示剩余%。 */
+    function QuotaBar(label, item, hint) {
+      if (!item) return null;
+      const rem = remainingPct(item);
+      const used = 100 - rem;
+      const color = quotaColor(rem);
+      return React.createElement(
+        "div",
+        {
+          className: "usage-stats-qbar",
+          title: hint || `${label} 剩余 ${rem}%（已用 ${used}%）`,
+        },
+        React.createElement("span", { className: "usage-stats-qbar-label" }, label),
+        React.createElement(
+          "span",
+          { className: "usage-stats-qbar-track" },
+          React.createElement("span", {
+            className: "usage-stats-qbar-fill",
+            style: { width: rem + "%", background: color },
+          }),
+        ),
+        React.createElement(
+          "span",
+          { className: "usage-stats-qbar-val", style: { color } },
+          `剩 ${rem}%`,
+        ),
+      );
+    }
+
+    // 当前是否跑在订阅制服务商（Z.ai/智谱 Coding Plan）上 —— 是则隐藏美元成本。
+    function onPlan(snapshot) {
+      const agent = snapshot && snapshot.agent;
+      return !!(agent && agent.provider && String(agent.provider).toLowerCase().includes("zai"));
+    }
+
+    // ------------------------------------------------- 药丸显示模式（可切换） --
+    // 以后接入新的模型/服务商，在这里加一行即可出现在切换按钮里。
+    const PILL_MODES = [
+      { id: "balance", label: "余额", icon: "¥" },
+      { id: "glm", label: "GLM", icon: "⚡" },
+    ];
+    const PILL_MODE_KEY = "dsh-usage-stats:pillMode";
+
+    function loadPillMode() {
+      try {
+        const v = window.localStorage.getItem(PILL_MODE_KEY);
+        if (PILL_MODES.some((m) => m.id === v)) return v;
+      } catch (err) {
+        /* localStorage 不可用时用默认 */
+      }
+      return null;
+    }
+
+    function savePillMode(id) {
+      try {
+        window.localStorage.setItem(PILL_MODE_KEY, id);
+      } catch (err) {
+        /* ignore */
+      }
+    }
+
     function formatTokens(n) {
       return typeof n === "number" ? n.toLocaleString() : "0";
     }
@@ -151,7 +320,7 @@ window.__ModuleLoader__.load({
     // ------------------------------------------------------- footer widget --
     // ------------------------------------------------------- footer widget --
     function UsageStatsPopover(props) {
-      const { snapshot, pos, onEnter, onLeave, onRestart, restarting } = props;
+      const { snapshot, pos, onEnter, onLeave, onRestart, restarting, mode, onMode } = props;
       if (!snapshot || !pos) return null;
       const usage = snapshot.usage;
       const cost = snapshot.cost;
@@ -159,6 +328,33 @@ window.__ModuleLoader__.load({
       const pricing = snapshot.pricing;
       const balance = balanceText(snapshot);
       const topUpUrl = topUpUrlOf(snapshot);
+      const q = quotaOf(snapshot);
+      const isGlm = mode === "glm";
+      const modeMeta = PILL_MODES.find((m) => m.id === mode) || PILL_MODES[0];
+      const popRow = (k, v, vStyle) =>
+        React.createElement(
+          "div",
+          { className: "usage-stats-pop-row" },
+          React.createElement("span", { className: "usage-stats-k" }, k),
+          React.createElement("span", { className: "usage-stats-v", style: vStyle }, v),
+        );
+      const usageRows = usage
+        ? [
+            ["输入 tokens", formatTokens(usage.inputTokens)],
+            ["输出 tokens", formatTokens(usage.outputTokens)],
+            ["缓存读 tokens", formatTokens(usage.cacheReadTokens)],
+            ["缓存写 tokens", formatTokens(usage.cacheWriteTokens)],
+            ["合计 tokens", formatTokens(usage.totalTokens)],
+            ["缓存命中率", formatRate(usage.cacheHitRate)],
+          ].map(([k, v]) =>
+            React.createElement(
+              "div",
+              { key: k, className: "usage-stats-pop-row" },
+              React.createElement("span", { className: "usage-stats-k" }, k),
+              React.createElement("span", { className: "usage-stats-v" }, v),
+            ),
+          )
+        : null;
       return ReactDOM.createPortal(
         React.createElement(
           "div",
@@ -174,109 +370,157 @@ window.__ModuleLoader__.load({
             onMouseEnter: onEnter,
             onMouseLeave: onLeave,
           },
-          React.createElement("div", { className: "usage-stats-pop-title" }, "用量与余额"),
-        React.createElement(
-          "div",
-          { className: "usage-stats-pop-balance" },
-          balance != null ? balance : "获取中…",
-        ),
-        snapshot.balance && snapshot.balance.infos
-          ? snapshot.balance.infos.map((info) =>
-              React.createElement(
-                "div",
-                { key: info.currency, className: "usage-stats-pop-row" },
-                React.createElement(
-                  "span",
-                  { className: "usage-stats-k" },
-                  `${info.currency} 充值 / 赠送`,
-                ),
-                React.createElement(
-                  "span",
-                  { className: "usage-stats-v" },
-                  `${info.toppedUpBalance || "0.00"} / ${info.grantedBalance || "0.00"}`,
-                ),
-              ),
-            )
-          : null,
-        React.createElement("div", { className: "usage-stats-pop-divider" }),
-        usage
-          ? [
-              ["输入 tokens", formatTokens(usage.inputTokens)],
-              ["输出 tokens", formatTokens(usage.outputTokens)],
-              ["缓存读 tokens", formatTokens(usage.cacheReadTokens)],
-              ["缓存写 tokens", formatTokens(usage.cacheWriteTokens)],
-              ["合计 tokens", formatTokens(usage.totalTokens)],
-              ["缓存命中率", formatRate(usage.cacheHitRate)],
-            ].map(([k, v]) =>
-              React.createElement(
-                "div",
-                { key: k, className: "usage-stats-pop-row" },
-                React.createElement("span", { className: "usage-stats-k" }, k),
-                React.createElement("span", { className: "usage-stats-v" }, v),
-              ),
-            )
-          : null,
-        React.createElement("div", { className: "usage-stats-pop-divider" }),
-        React.createElement(
-          "div",
-          { className: "usage-stats-pop-row" },
-          React.createElement("span", { className: "usage-stats-k" }, "预估费用"),
           React.createElement(
-            "span",
-            { className: "usage-stats-v" },
-            cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
+            "div",
+            { className: "usage-stats-pop-title" },
+            isGlm ? "GLM 配额与用量" : "余额与用量",
           ),
-        ),
-        lastRound && lastRound.cost
-          ? React.createElement(
-              "div",
-              { className: "usage-stats-pop-row" },
-              React.createElement("span", { className: "usage-stats-k" }, "上一轮"),
-              React.createElement(
-                "span",
-                { className: "usage-stats-v" },
-                `¥${lastRound.cost.cnyAmount.toFixed(2)}`,
-              ),
-            )
-          : null,
-        React.createElement(
-          "div",
-          { className: "usage-stats-pop-row" },
-          React.createElement("span", { className: "usage-stats-k" }, "定价同步"),
+          // —— 模式切换器：点击即切换，选择持久化到浏览器 ——
           React.createElement(
-            "span",
-            { className: "usage-stats-v" },
-            pricing
-              ? pricing.mode === "synced"
-                ? "已同步"
-                : pricing.mode === "manual"
-                  ? "手动"
-                  : "未启用"
-              : "—",
+            "div",
+            { className: "usage-stats-mode-seg" },
+            PILL_MODES.map((m) =>
+              React.createElement(
+                "button",
+                {
+                  key: m.id,
+                  type: "button",
+                  className:
+                    "usage-stats-mode-btn" + (mode === m.id ? " usage-stats-on" : ""),
+                  onClick: () => onMode && onMode(m.id),
+                },
+                m.label,
+              ),
+            ),
           ),
-        ),
-        snapshot.error
-          ? React.createElement(
-              "div",
-              { className: "usage-stats-error" },
-              snapshot.error.message,
-            )
-          : null,
-        React.createElement(
-          "button",
-          {
-            type: "button",
-            className: "usage-stats-btn usage-stats-primary",
-            onClick: () => {
-              try {
-                window.open(topUpUrl, "_blank", "noopener");
-              } catch (err) {
-                /* ignore */
-              }
-            },
-          },
-          "去充值",
-        ),
+          isGlm
+            ? [
+                q
+                  ? React.createElement(
+                      "div",
+                      { key: "qbars", className: "usage-stats-qbars" },
+                      QuotaBar("5h 窗口", q.fiveHour,
+                        q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+                      QuotaBar("周配额", q.weekly,
+                        q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+                      QuotaBar("工具/搜索", q.tools,
+                        q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
+                    )
+                  : React.createElement(
+                      "div",
+                      { key: "qwait", className: "usage-stats-k" },
+                      snapshot.zaiQuotaError
+                        ? `配额获取失败：${snapshot.zaiQuotaError.message}`
+                        : "配额加载中…",
+                    ),
+                q
+                  ? [
+                      q.level ? popRow("套餐档位", q.level) : null,
+                      q.fiveHour && q.fiveHour.resetAt != null
+                        ? popRow("5h 窗口重置", timeText(q.fiveHour.resetAt))
+                        : null,
+                      q.weekly && q.weekly.resetAt != null
+                        ? popRow("周配额重置", timeText(q.weekly.resetAt))
+                        : null,
+                    ].filter(Boolean)
+                  : null,
+                React.createElement("div", { key: "d1", className: "usage-stats-pop-divider" }),
+                usageRows,
+              ]
+            : [
+                React.createElement(
+                  "div",
+                  { key: "bal", className: "usage-stats-pop-balance" },
+                  balance != null ? balance : "获取中…",
+                ),
+                snapshot.balance && snapshot.balance.infos
+                  ? snapshot.balance.infos.map((info) =>
+                      React.createElement(
+                        "div",
+                        { key: info.currency, className: "usage-stats-pop-row" },
+                        React.createElement(
+                          "span",
+                          { className: "usage-stats-k" },
+                          `${info.currency} 充值 / 赠送`,
+                        ),
+                        React.createElement(
+                          "span",
+                          { className: "usage-stats-v" },
+                          `${info.toppedUpBalance || "0.00"} / ${info.grantedBalance || "0.00"}`,
+                        ),
+                      ),
+                    )
+                  : null,
+                React.createElement("div", { key: "d2", className: "usage-stats-pop-divider" }),
+                usageRows,
+                React.createElement("div", { key: "d3", className: "usage-stats-pop-divider" }),
+                // 按量费用只统计 DeepSeek 系调用（宿主已按服务商拆账）。
+                React.createElement(
+                  "div",
+                  { key: "cost", className: "usage-stats-pop-row" },
+                  React.createElement("span", { className: "usage-stats-k" }, "按量费用（DeepSeek）"),
+                  React.createElement(
+                    "span",
+                    { className: "usage-stats-v" },
+                    cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "—",
+                  ),
+                ),
+                lastRound && lastRound.cost
+                  ? React.createElement(
+                      "div",
+                      { key: "lr", className: "usage-stats-pop-row" },
+                      React.createElement("span", { className: "usage-stats-k" }, "上一轮计费"),
+                      React.createElement(
+                        "span",
+                        { className: "usage-stats-v" },
+                        `¥${lastRound.cost.cnyAmount.toFixed(2)}` +
+                          (lastRound.cost.dsTokens
+                            ? `（${formatTokens(lastRound.cost.dsTokens)} tokens）`
+                            : ""),
+                      ),
+                    )
+                  : null,
+                React.createElement(
+                  "div",
+                  { key: "pr", className: "usage-stats-pop-row" },
+                  React.createElement("span", { className: "usage-stats-k" }, "定价同步"),
+                  React.createElement(
+                    "span",
+                    { className: "usage-stats-v" },
+                    pricing
+                      ? pricing.mode === "synced"
+                        ? "已同步"
+                        : pricing.mode === "manual"
+                          ? "手动"
+                          : "未启用"
+                      : "—",
+                  ),
+                ),
+                snapshot.error
+                  ? React.createElement(
+                      "div",
+                      { key: "err", className: "usage-stats-error" },
+                      snapshot.error.message,
+                    )
+                  : null,
+              ],
+          !isGlm
+            ? React.createElement(
+                "button",
+                {
+                  type: "button",
+                  className: "usage-stats-btn usage-stats-primary",
+                  onClick: () => {
+                    try {
+                      window.open(topUpUrl, "_blank", "noopener");
+                    } catch (err) {
+                      /* ignore */
+                    }
+                  },
+                },
+                "去充值",
+              )
+            : null,
         React.createElement(
           "button",
           {
@@ -301,6 +545,16 @@ window.__ModuleLoader__.load({
       const [errMsg, setErrMsg] = React.useState("");
       const [pop, setPop] = React.useState(null);
       const [restarting, setRestarting] = React.useState(false);
+      // 药丸显示模式：手动切换、localStorage 持久化（默认余额）。
+      const [mode, setMode] = React.useState(() => loadPillMode() || "balance");
+      const setAndSaveMode = (id) => {
+        setMode(id);
+        savePillMode(id);
+      };
+      const cycleMode = () => {
+        const i = PILL_MODES.findIndex((m) => m.id === mode);
+        setAndSaveMode(PILL_MODES[(i + 1) % PILL_MODES.length].id);
+      };
 
       React.useEffect(() => {
         let alive = true;
@@ -332,10 +586,15 @@ window.__ModuleLoader__.load({
       }, [refresh]);
 
       const text = balanceText(snapshot);
-      const label = text != null ? text : failed ? (errMsg || "获取失败") : "加载中…";
+      const q = quotaOf(snapshot);
+      const qtext = quotaText(snapshot);
+      const showQuota = mode === "glm";
+      const label =
+        text != null ? text : failed ? (errMsg || "获取失败") : "加载中…";
       const lastRound = snapshot ? snapshot.lastRound : null;
+      // 按量费用已按服务商拆账：GLM 轮次为 0，只有 >0 才显示后缀，避免噪音。
       const lastCostSuffix =
-        lastRound && lastRound.cost
+        lastRound && lastRound.cost && lastRound.cost.cnyAmount > 0
           ? `（-¥${lastRound.cost.cnyAmount.toFixed(2)}）`
           : "";
 
@@ -381,24 +640,74 @@ window.__ModuleLoader__.load({
             ref: pillRef,
             type: "button",
             className: "usage-stats-pill" + (wide ? "" : " usage-stats-rail"),
-            "aria-label": text ? `余额 ${text}` : "用量与余额",
+            "aria-label": showQuota
+              ? `GLM 配额 ${qtext || "加载中"}（点击切换到余额）`
+              : text != null
+                ? `余额 ${text}（点击切换到 GLM 配额）`
+                : "用量与余额",
             onClick: () => {
-              try {
-                window.open(topUpUrlOf(snapshot), "_blank", "noopener");
-              } catch (err) {
-                /* ignore */
+              // 宽侧栏余额模式 = 充值（原行为）；其余点击 = 切换显示模式。
+              if (wide && !showQuota && text != null) {
+                try {
+                  window.open(topUpUrlOf(snapshot), "_blank", "noopener");
+                } catch (err) {
+                  /* ignore */
+                }
+              } else {
+                cycleMode();
               }
             },
           },
-          React.createElement("span", { className: "usage-stats-coin" }, "¥"),
+          // —— 按当前模式渲染 ——
+          showQuota
+            ? [
+                q
+                  ? React.createElement(
+                      "span",
+                      { key: "rings", className: "usage-stats-quota" },
+                      QuotaRing(q.fiveHour, wide ? "5h" : null, wide ? 22 : 18),
+                      wide && q.weekly ? QuotaRing(q.weekly, "周", 22) : null,
+                    )
+                  : React.createElement("span", { key: "rw", className: "usage-stats-coin" }, "⚡"),
+              ]
+            : [
+                text != null
+                  ? React.createElement("span", { key: "coin", className: "usage-stats-coin" }, "¥")
+                  : null,
+                wide && text != null
+                  ? React.createElement(
+                      "span",
+                      { key: "lbl", className: "usage-stats-label" },
+                      label,
+                      lastCostSuffix
+                        ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
+                        : null,
+                    )
+                  : null,
+              ],
           wide
             ? React.createElement(
                 "span",
-                { className: "usage-stats-label" },
-                label,
-                lastCostSuffix
-                  ? React.createElement("span", { className: "usage-stats-sublabel" }, lastCostSuffix)
-                  : null,
+                {
+                  key: "toggle",
+                  className: "usage-stats-mode-toggle",
+                  role: "button",
+                  tabIndex: 0,
+                  title: "切换显示（余额 ↔ GLM 配额）",
+                  onClick: (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    cycleMode();
+                  },
+                  onKeyDown: (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      cycleMode();
+                    }
+                  },
+                },
+                "⇄",
               )
             : null,
         ),
@@ -410,6 +719,8 @@ window.__ModuleLoader__.load({
               onLeave: hidePop,
               onRestart,
               restarting,
+              mode,
+              onMode: setAndSaveMode,
             })
           : null,
       );
@@ -463,6 +774,8 @@ window.__ModuleLoader__.load({
       const cost = snapshot ? snapshot.cost : null;
       const pricing = snapshot ? snapshot.pricing : null;
       const balance = balanceText(snapshot);
+      const q = quotaOf(snapshot);
+      const plan = onPlan(snapshot);
 
       const rows = [
         ["输入 tokens", usage ? formatTokens(usage.inputTokens) : "—"],
@@ -472,7 +785,7 @@ window.__ModuleLoader__.load({
         ["合计 tokens", usage ? formatTokens(usage.totalTokens) : "—"],
         ["缓存命中率", usage ? formatRate(usage.cacheHitRate) : "—"],
         [
-          "预估费用",
+          "按量费用（仅 DeepSeek 调用）",
           cost ? `${cost.currency} ${cost.amount.toFixed(2)}` : "（未配置价格表）",
         ],
         ["最后刷新", timeText(snapshot && snapshot.lastRefresh)],
@@ -487,7 +800,54 @@ window.__ModuleLoader__.load({
           React.createElement(
             "div",
             { className: "usage-stats-k" },
-            "账户余额",
+            "GLM Coding Plan 配额",
+          ),
+          q
+            ? React.createElement(
+                "div",
+                { className: "usage-stats-qbars" },
+                QuotaBar("5h 窗口", q.fiveHour,
+                  q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+                QuotaBar("周配额", q.weekly,
+                  q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+                QuotaBar("工具/搜索", q.tools,
+                  q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
+              )
+            : React.createElement(
+                "div",
+                { className: "usage-stats-k" },
+                snapshot && snapshot.zaiQuotaError
+                  ? `获取失败：${snapshot.zaiQuotaError.message}`
+                  : "未获取到配额（未配置 ZAI_API_KEY？）",
+              ),
+          q
+            ? [
+                q.level ? ["套餐档位", q.level] : null,
+                q.fiveHour && q.fiveHour.resetAt != null
+                  ? ["5h 窗口重置", timeText(q.fiveHour.resetAt)]
+                  : null,
+                q.weekly && q.weekly.resetAt != null
+                  ? ["周配额重置", timeText(q.weekly.resetAt)]
+                  : null,
+              ]
+                .filter(Boolean)
+                .map(([k, v]) =>
+                  React.createElement(
+                    "div",
+                    { key: k, className: "usage-stats-row" },
+                    React.createElement("span", { className: "usage-stats-k" }, k),
+                    React.createElement("span", { className: "usage-stats-v" }, v),
+                  ),
+                )
+            : null,
+        ),
+        React.createElement(
+          "div",
+          { className: "usage-stats-card" },
+          React.createElement(
+            "div",
+            { className: "usage-stats-k" },
+            "DeepSeek 账户余额",
           ),
           React.createElement(
             "div",
@@ -517,6 +877,13 @@ window.__ModuleLoader__.load({
                 "div",
                 { className: "usage-stats-error" },
                 `${snapshot.error.message}`,
+              )
+            : null,
+          snapshot && snapshot.zaiQuotaError
+            ? React.createElement(
+                "div",
+                { className: "usage-stats-error" },
+                `GLM 配额获取失败：${snapshot.zaiQuotaError.message}`,
               )
             : null,
           React.createElement(

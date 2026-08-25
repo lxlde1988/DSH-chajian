@@ -6,6 +6,7 @@ import { dirname, resolve as pathResolve, sep } from "node:path";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { request as httpsRequest } from "node:https";
 
 // template/dshell.css
 var dshell_default = `/* dsh-worktable \u539F\u751F\u76AE\u80A4 \xB7 DSH \u8BBE\u8BA1\u7CFB\u7EDF\u7EC4\u4EF6\u5E93
@@ -216,6 +217,164 @@ async function gitStatus(cwd) {
     return { isRepo: false, branch: void 0, entries: [] };
   }
 }
+/* ---- 内嵌搜索中继（360 + Bing），随 dsh web 常驻，无需登录 ---- */
+function wtFetchText(url, timeoutMs, redirectsLeft) {
+  return new Promise((resolve, reject) => {
+    try {
+      const u = new URL(url);
+      const req = httpsRequest(u, { headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36", "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8", "Accept": "text/html,*/*" }, timeout: timeoutMs }, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location && (redirectsLeft ?? 3) > 0) {
+          res.resume();
+          return resolve(wtFetchText(new URL(res.headers.location, u).href, timeoutMs, (redirectsLeft ?? 3) - 1));
+        }
+        if (res.statusCode !== 200) { res.resume(); return reject(new Error("HTTP " + res.statusCode)); }
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      });
+      req.on("timeout", () => req.destroy(new Error("timeout")));
+      req.on("error", reject);
+      req.end();
+    } catch (err) { reject(err); }
+  });
+}
+function wtDecode(s) { return String(s || "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " "); }
+function wtHost(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } }
+function wtStrip(s) { return wtDecode(String(s || "").replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim(); }
+function wtBingUnwrap(u) { const m = String(u).match(/bing\.com\/ck\/a\?[^\s]*?[?&]u=a1([A-Za-z0-9_-]+)/); if (m) { try { let b = m[1].replace(/-/g, "+").replace(/_/g, "/"); while (b.length % 4) b += "="; return Buffer.from(b, "base64").toString("utf8"); } catch { } } return u; }
+async function wtResolveSo(link) { try { const r = await wtFetchText(link, 10000); const m = r.match(/window\.location\.replace\("([^"]+)"\)/) || r.match(/URL='([^']+)'/); return m ? wtDecode(m[1]) : null; } catch { return null; } }
+function wtJunk(u, title) {
+  const p = (() => { try { const x = new URL(u); return (x.pathname.replace(/\/+$/, "") || "/"); } catch { return "/"; } })();
+  if (/^\/(search|results|explore|hashtag|topics|notifications|settings|login|signup|following|live|i|video)$/i.test(p)) return true;
+  if (/[?&](q|query|kw|keyword|search_query)=/.test(u)) return true;
+  const h = wtHost(u);
+  if (/(^|\.)((x|twitter)\.com)$/.test(h) && u.indexOf("/status/") < 0) return true;
+  if (/^(24小时|48小时|1天|7天|30天|本周|本月|热门|最新|人们|探索|登录|注册|查看更多|更多结果)/.test(String(title || "").trim())) return true;
+  return false;
+}
+async function wtSearchSo360(kw, domain) {
+  const q = (domain ? "site:" + domain + " " : "") + kw;
+  const html = await wtFetchText("https://www.so.com/s?q=" + encodeURIComponent(q) + "&pn=1", 20000);
+  if (/antispider|验证码/.test(html)) throw new Error("360 反爬");
+  const re = /<li[^>]+class="res-list[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
+  const blocks = []; let m;
+  while ((m = re.exec(html)) && blocks.length < 10) {
+    const blk = m[1]; const am = blk.match(/<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
+    if (!am) continue;
+    const dm = blk.match(/<p[^>]+class="[^"]*res-desc[^"]*"[^>]*>([\s\S]*?)<\/p>/) || blk.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    blocks.push({ href: wtDecode(am[1]), title: wtStrip(am[2]), snip: dm ? wtStrip(dm[1]).slice(0, 200) : "" });
+  }
+  if (!blocks.length) throw new Error("360 无结果");
+  const resolved = await Promise.all(blocks.map(async (b) => { if (b.href.indexOf("so.com/link") >= 0) { const r = await wtResolveSo(b.href); return r || b.href; } return b.href; }));
+  const seen = new Set(); const items = [];
+  blocks.forEach((b, i) => {
+    let url = resolved[i];
+    if (domain) { const h = wtHost(url); if (h && h.indexOf(domain) < 0 && url.indexOf(domain) < 0) return; }
+    if (!b.title || b.title.length < 2 || b.title === "小红书" || b.title === "微博") return;
+    if (wtJunk(url, b.title)) return;
+    if (seen.has(url)) return;
+    seen.add(url);
+    items.push({ title: b.title.slice(0, 120), url, snippet: b.snip });
+  });
+  return items;
+}
+async function wtSearchBing(kw, domain) {
+  const q = (domain ? "site:" + domain + " " : "") + kw;
+  const html = await wtFetchText("https://www.bing.com/search?q=" + encodeURIComponent(q) + "&count=12&mkt=zh-CN", 20000);
+  const re = /<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/li>/g;
+  const items = []; const seen = new Set(); let m;
+  const ENGINE = ["bing.com", "microsoft.com", "msn.com", "duckduckgo.com", "google.com", "so.com"];
+  while ((m = re.exec(html)) && items.length < 8) {
+    const url = wtBingUnwrap(wtDecode(m[1])); const title = wtStrip(m[2]);
+    if (!/^https?:\/\//.test(url) || title.length < 4) continue;
+    const h = wtHost(url);
+    if (domain) { if (h.indexOf(domain) < 0 && url.indexOf(domain) < 0) continue; } else { if (ENGINE.some((e) => h.indexOf(e) >= 0)) continue; }
+    if (wtJunk(url, title)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    const blk = m[0];
+    const pm = blk.match(/<p[^>]*class="[^"]*(?:b_lineclamp|b_paractl)[^"]*"[^>]*>([\s\S]*?)<\/p>/) || blk.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    items.push({ title: title.slice(0, 120), url, snippet: pm ? wtStrip(pm[1]).slice(0, 200) : "" });
+  }
+  return items;
+}
+/* ---- CLI 通道（小红书 / X）: 调用本机已登录 CLI，随 dsh web 常驻 ---- */
+function wtFindBin(name) {
+  const fs = require("node:fs");
+  const envHit = process.env["WT_" + name.toUpperCase() + "_BIN"];
+  const cands = [];
+  if (envHit) cands.push(envHit);
+  const la = process.env.LOCALAPPDATA;
+  if (la) for (const v of ["Python313", "Python312", "Python311", "Python310"]) cands.push(la + "\\Programs\\Python\\" + v + "\\Scripts\\" + name + ".exe");
+  for (const c of cands) { try { if (fs.existsSync(c)) return c; } catch { } }
+  return name + ".exe";
+}
+const WT_TWITTER_AUTH_CANDIDATES = () => [
+  process.env.WT_TWITTER_AUTH,
+  "D:\\deepseek harness\\项目\\X cli\\X-Cli\\_tools\\twitter_auth.json",
+  pathResolve(homedir(), ".dsh", "twitter_auth.json")
+].filter(Boolean);
+function wtCliRun(bin, args, timeoutMs, extraEnv) {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { timeout: timeoutMs || 90000, maxBuffer: 8 * 1024 * 1024, env: { ...process.env, ...(extraEnv || {}) } }, (err, stdout) => {
+      if (err) return reject(err);
+      try { resolve(JSON.parse(stdout)); } catch (e) { reject(new Error("CLI 输出非 JSON")); }
+    });
+  });
+}
+let WT_TW_ENV = null;
+async function wtTwitterEnv() {
+  if (WT_TW_ENV) return WT_TW_ENV;
+  for (const p of WT_TWITTER_AUTH_CANDIDATES()) {
+    try { WT_TW_ENV = JSON.parse(await readFile(p, "utf8")); break; } catch { }
+  }
+  if (!WT_TW_ENV) WT_TW_ENV = {};
+  return WT_TW_ENV;
+}
+async function wtSearchXhsCli(kw) {
+  const j = await wtCliRun(wtFindBin("xhs"), ["search", kw, "--json"], 90000, { OUTPUT: "json" });
+  const data = (j && (j.data || {})) || {};
+  let list = data.items || data.result || [];
+  if (!Array.isArray(list)) list = [];
+  const items = [];
+  for (const it of list.slice(0, 8)) {
+    const c = (it && (it.note_card || {})) || {};
+    const info = c.interact_info || {};
+    const id = it.id || "";
+    const token = it.xsec_token || (c.user && c.user.xsec_token) || "";
+    const author = (c.user && (c.user.nickname || c.user.nick_name)) || "";
+    items.push({
+      title: String(c.display_title || "").slice(0, 120),
+      url: "https://www.xiaohongshu.com/explore/" + id + "?xsec_token=" + encodeURIComponent(token) + "&xsec_source=pc_search",
+      snippet: "",
+      meta: "❤ " + (info.liked_count || 0) + " · 💬 " + (info.comment_count || 0) + " · 收藏 " + (info.collected_count || 0) + " · " + author
+    });
+  }
+  if (!items.length) throw new Error("xhs-cli 无结果");
+  return items;
+}
+async function wtSearchTwitterCli(kw) {
+  const env = await wtTwitterEnv();
+  const j = await wtCliRun(wtFindBin("twitter"), ["search", kw, "--max", "8", "--json"], 120000, {
+    TWITTER_PROXY: env.proxy || "",
+    TWITTER_AUTH_TOKEN: env.auth_token || "",
+    TWITTER_CT0: env.ct0 || ""
+  });
+  const list = (j && Array.isArray(j.data)) ? j.data : [];
+  const items = [];
+  for (const t of list.slice(0, 8)) {
+    const a = t.author || {};
+    const m = t.metrics || {};
+    items.push({
+      title: String(t.text || "").replace(/\s+/g, " ").slice(0, 140),
+      url: "https://x.com/" + (a.screenName || "i") + "/status/" + t.id,
+      snippet: "",
+      meta: "❤ " + (m.likes || 0) + " · 🔁 " + (m.retweets || 0) + " · 👁 " + (m.views || 0) + " · @" + (a.screenName || "")
+    });
+  }
+  if (!items.length) throw new Error("twitter-cli 无结果");
+  return items;
+}
 function setupTerminal(webServer, ctx) {
   if (typeof webServer.registerUpgrade !== "function") return;
   const wsMod = loadPkg("ws");
@@ -348,6 +507,54 @@ function apply(ctx) {
         res.end(data);
       } catch (err) {
         json(res, 404, { error: String(err) });
+      }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/searchrelay",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      const domain = u.searchParams.get("domain") || "";
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      let items = [], via = "", err = "";
+      try { items = await wtSearchSo360(kw, domain); via = "so360"; } catch (e) { err = String(e && e.message || e); }
+      if (!items.length) { try { items = await wtSearchBing(kw, domain); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
+      if (!items.length) { json(res, 502, { kw, domain, count: 0, items: [], error: err || "所有引擎均无结果" }); return; }
+      json(res, 200, { kw, domain, count: items.length, items, via });
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/xhssearch",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      try {
+        const items = await wtSearchXhsCli(kw);
+        json(res, 200, { kw, count: items.length, items, via: "xhs-api" });
+      } catch (e) {
+        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
+      }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/twittersearch",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      try {
+        const items = await wtSearchTwitterCli(kw);
+        json(res, 200, { kw, count: items.length, items, via: "twitter-api" });
+      } catch (e) {
+        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
       }
     }
   });

@@ -16626,10 +16626,19 @@ var splitStore = {
       this.syncAnchor();
     });
     this.fallback.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-phase"] });
+    /* 原逻辑：style 边距与记录不一致即 close() —— 但外层(DSH壳)的 React 重渲染
+       （打字/点击/拖动都会触发）会重写该元素 style，导致分屏被误关。
+       改为自愈：发现不一致时把边距写回；仅当元素已脱离文档时才关闭。 */
     this.yieldObserver = new MutationObserver(() => {
       if (!this.active || !this.viewArea) return;
-      if (this.viewArea.style.marginLeft !== this.lastMarginLeft || this.viewArea.style.marginRight !== this.lastMarginRight || this.viewArea.style.marginTop !== this.lastMarginTop) {
-        this.close();
+      const va = this.viewArea;
+      if (!va.isConnected) { this.close(); return; }
+      if (va.style.marginLeft !== this.lastMarginLeft || va.style.marginRight !== this.lastMarginRight || va.style.marginTop !== this.lastMarginTop) {
+        try {
+          va.style.marginLeft = this.lastMarginLeft;
+          va.style.marginRight = this.lastMarginRight;
+          va.style.marginTop = this.lastMarginTop;
+        } catch {}
       }
     });
     this.yieldObserver.observe(viewArea, { attributes: true, attributeFilter: ["style"] });
@@ -16995,6 +17004,7 @@ var splitStore = {
     persistSaved(this.spec.id, { chatW: this.chatW, topH: this.topH, leftW: this.leftW, paneWs: this.paneWs, topWs: this.topWs, leftWs: this.leftWs });
   },
   close() {
+    try { console.warn('[worktable] split close triggered', new Error().stack); } catch {}
     if (this.viewArea) {
       this.viewArea.style.marginLeft = this.savedMarginLeft;
       this.viewArea.style.marginRight = this.savedMarginRight;
@@ -17023,11 +17033,9 @@ var splitStore = {
   }
 };
 if (typeof document !== "undefined" && document.body) {
-  const taObserver = new MutationObserver(() => {
-    if (!splitStore.active) return;
-    if (document.querySelector(".ta_split")) splitStore.close();
-  });
-  taObserver.observe(document.body, { childList: true, subtree: true });
+  /* 已停用：此 MutationObserver 会在 DOM 出现任意 .ta_split 元素时就自动关闭分屏。
+     用户在拖分隔条/交互时外层会瞬时出现该类元素，导致分屏被误关（跳回控制室）。
+     现改为不做任何自动关闭，仅保留手动点 ✕ / Esc。 */
 }
 function allocate(panes, ws, total) {
   const out = [];
@@ -18248,6 +18256,9 @@ function SplitWorkspace() {
   (0, import_react.useEffect)(() => {
     if (!snap.active) return;
     const onKey = (event) => {
+      if (event.isComposing || event.keyCode === 229) return;
+      const t = event.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
       if (event.key === "Escape") splitStore.close();
     };
     window.addEventListener("keydown", onKey);
@@ -19085,6 +19096,7 @@ function buildMountContent(folder, d) {
   return { kind: "iframe", url: "/api/worktable/site/" + encodeURIComponent(dir) + "/" + encodeURIComponent(name), title: name };
 }
 var notifyStateSeenRef = { current: {} };
+var splitAutoCloseTimer = { current: null };
 function clearNotifyAck(sid) {
   try {
     const all = loadNotifyAck();
@@ -19137,8 +19149,18 @@ function syncSessionScope(list2) {
             const pluginSwitch = pluginOpenedSessionsRef.current.has(current);
             pluginOpenedSessionsRef.current.delete(current);
             if (!pluginSwitch) {
-              suppressRestoreRef.current = true;
-              splitStore.close();
+              if (splitAutoCloseTimer.current) clearTimeout(splitAutoCloseTimer.current);
+              splitAutoCloseTimer.current = setTimeout(() => {
+                splitAutoCloseTimer.current = null;
+                try {
+                  if (!splitStore.active || !splitStore.spec) return;
+                  if (projectAttachRef.attached !== attached) return;
+                  const cur2 = list2.getSnapshot()?.current ?? "";
+              /* 用户反馈：打字时被切到其他会话导致分屏自动关闭、跳回控制室。
+                 现改为：会话切换不再自动关闭分屏；仅手动点 ✕ / 按 Esc 才关闭。 */
+                } catch {
+                }
+              }, 1500);
             }
           }
         }

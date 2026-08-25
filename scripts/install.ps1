@@ -1,9 +1,10 @@
 ﻿# install.ps1 — 把仓库里的插件 / 配置 / 使用习惯应用到本机
 # 用法：在新电脑上 git clone 本仓库后，运行  .\scripts\install.ps1
+# 插件清单自动枚举 plugins\ 下所有目录，新增插件无需改本脚本。
 $ErrorActionPreference = 'Stop'
 
 $Repo   = Split-Path $PSScriptRoot -Parent      # scripts 上一级 = 仓库根
-$HomeDs = Join-Path $HOME '.dsh'
+$HomeDs = Join-Path $env:USERPROFILE '.dsh'
 
 Write-Host "== 将仓库内容安装/同步到 $HomeDs ==" -ForegroundColor Cyan
 
@@ -15,18 +16,17 @@ if (-not (Test-Path $web)) {
   Write-Host "          生成 profile 后再运行本脚本。" -ForegroundColor Yellow
 }
 
-# 1) 复制插件到 profile node_modules
+# 1) 复制插件到 profile node_modules（枚举仓库 plugins\* 全部插件）
 $profNode = Join-Path $HomeDs 'profiles\node_modules'
 New-Item -ItemType Directory -Path $profNode -Force | Out-Null
-foreach ($pl in @('dsh-usage-stats', 'dsh-worktable')) {
-  $src = Join-Path $Repo "plugins\$pl"
-  $dst = Join-Path $profNode $pl
-  if (Test-Path $src) {
-    Copy-Item $src $dst -Recurse -Force
-    Write-Host "  已复制插件: $pl"
-  } else {
-    Write-Host "  [跳过] 仓库中未找到插件: $pl" -ForegroundColor Yellow
-  }
+$pluginDirs = @(Get-ChildItem (Join-Path $Repo 'plugins') -Directory -ErrorAction SilentlyContinue)
+if (-not $pluginDirs -or $pluginDirs.Count -eq 0) {
+  Write-Host "  [警告] 仓库 plugins\ 下没有插件目录" -ForegroundColor Yellow
+}
+foreach ($pl in $pluginDirs) {
+  $dst = Join-Path $profNode $pl.Name
+  Copy-Item $pl.FullName $dst -Recurse -Force
+  Write-Host "  已复制插件: $($pl.Name)"
 }
 
 # 2) 复制 profile web 配置（cordis.patch.yml 决定加载哪些插件）
@@ -71,7 +71,7 @@ if (Test-Path (Join-Path $Repo '启动DSH.bat')) {
 
 Write-Host ""
 Write-Host "== 完成！ ==" -ForegroundColor Green
-Write-Host "  插件已装入: $profNode"
+Write-Host "  插件已装入: $profNode ($($pluginDirs.Count) 个)"
 Write-Host "  配置已写入: $web"
 Write-Host "  习惯已同步: $HomeDs\settings.yaml"
 Write-Host ""
