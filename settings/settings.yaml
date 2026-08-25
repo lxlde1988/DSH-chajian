@@ -22,3 +22,4 @@ llm-deepseek:
       contextWindow: 1000000
     - id: deepseek-v4-flash-vision-exp
       name: deepseek-v4-flash-vision-exp
+      inputModalities: [text, image]
