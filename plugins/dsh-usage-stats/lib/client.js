@@ -34,7 +34,7 @@ window.__ModuleLoader__.load({
 .usage-stats-qbar-label{flex:0 0 64px;font-size:12px;color:var(--dsw-alias-label-secondary,#666);white-space:nowrap}
 .usage-stats-qbar-track{flex:1;height:6px;border-radius:3px;background:rgba(128,128,128,.18);overflow:hidden;min-width:0}
 .usage-stats-qbar-fill{display:block;height:100%;border-radius:3px;transition:width .3s ease}
-.usage-stats-qbar-val{flex:0 0 40px;text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.usage-stats-qbar-val{flex:0 0 52px;text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
 .usage-stats-qbars{display:flex;flex-direction:column;gap:8px;margin:4px 0}
 .usage-stats-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;line-height:20px}
 .usage-stats-lines{display:flex;flex-direction:column;min-width:0}
@@ -152,39 +152,39 @@ window.__ModuleLoader__.load({
       const q = quotaOf(snapshot);
       if (!q) return null;
       const parts = [];
-      if (q.fiveHour) parts.push(`5h ${Math.round(q.fiveHour.percentage)}%`);
-      if (q.weekly) parts.push(`周 ${Math.round(q.weekly.percentage)}%`);
+      if (q.fiveHour) parts.push(`5h 剩 ${remainingPct(q.fiveHour)}%`);
+      if (q.weekly) parts.push(`周 剩 ${remainingPct(q.weekly)}%`);
       return parts.length ? parts.join(" · ") : null;
     }
 
-    function worstQuotaPct(q) {
-      if (!q) return 0;
-      const pcts = [q.fiveHour, q.weekly]
-        .filter(Boolean)
-        .map((x) => Number(x.percentage) || 0);
-      return pcts.length ? Math.max(...pcts) : 0;
+    /** 剩余百分比：接口的 percentage 是“已用”，显示取 100-已用。 */
+    function remainingPct(item) {
+      if (!item) return 0;
+      return Math.max(0, Math.min(100, Math.round(100 - (Number(item.percentage) || 0))));
     }
 
-    function quotaColor(pct) {
-      if (pct >= 90) return "#d64545";
-      if (pct >= 70) return "#b8860b";
+    /** 颜色按“剩余”判断：绿=余量充足，剩得少才告警（≤30% 琥珀，≤10% 红）。 */
+    function quotaColor(remaining) {
+      if (remaining <= 10) return "#d64545";
+      if (remaining <= 30) return "#b8860b";
       return "#2e7d32";
     }
 
-    /** 圆环（药丸内）：pct 百分比 + 底部小标注，颜色随用量变化。 */
+    /** 圆环（药丸内）：绿色弧=剩余，灰色底轨=已用，底部小标注。 */
     function QuotaRing(item, caption, size = 22) {
       if (!item) return null;
-      const pct = Math.min(100, Math.max(0, Number(item.percentage) || 0));
+      const rem = remainingPct(item);
+      const used = 100 - rem;
       const stroke = size >= 24 ? 4 : 3;
       const r = (size - stroke) / 2;
       const c = 2 * Math.PI * r;
-      const dash = (pct / 100) * c;
-      const color = quotaColor(pct);
+      const dash = (rem / 100) * c;
+      const color = quotaColor(rem);
       return React.createElement(
         "span",
         {
           className: "usage-stats-qring",
-          title: `${caption} 已用 ${Math.round(pct)}%`,
+          title: `${caption} 剩余 ${rem}%（已用 ${used}%）`,
         },
         React.createElement(
           "svg",
@@ -200,8 +200,9 @@ window.__ModuleLoader__.load({
             cy: size / 2,
             r,
             fill: "none",
-            stroke: "currentColor",
-            strokeOpacity: 0.18,
+            // 灰色底轨代表“已用”
+            stroke: "#9aa0a6",
+            strokeOpacity: 0.45,
             strokeWidth: stroke,
           }),
           React.createElement("circle", {
@@ -222,27 +223,31 @@ window.__ModuleLoader__.load({
       );
     }
 
-    /** 进度条（弹窗/设置面板）：标签 | 轨道+彩色填充 | 百分比。 */
+    /** 进度条（弹窗/设置面板）：绿色填充=剩余，灰色轨道=已用，右侧显示剩余%。 */
     function QuotaBar(label, item, hint) {
       if (!item) return null;
-      const pct = Math.min(100, Math.max(0, Number(item.percentage) || 0));
-      const color = quotaColor(pct);
+      const rem = remainingPct(item);
+      const used = 100 - rem;
+      const color = quotaColor(rem);
       return React.createElement(
         "div",
-        { className: "usage-stats-qbar", title: hint || `${label} 已用 ${Math.round(pct)}%` },
+        {
+          className: "usage-stats-qbar",
+          title: hint || `${label} 剩余 ${rem}%（已用 ${used}%）`,
+        },
         React.createElement("span", { className: "usage-stats-qbar-label" }, label),
         React.createElement(
           "span",
           { className: "usage-stats-qbar-track" },
           React.createElement("span", {
             className: "usage-stats-qbar-fill",
-            style: { width: pct + "%", background: color },
+            style: { width: rem + "%", background: color },
           }),
         ),
         React.createElement(
           "span",
           { className: "usage-stats-qbar-val", style: { color } },
-          `${Math.round(pct)}%`,
+          `剩 ${rem}%`,
         ),
       );
     }
