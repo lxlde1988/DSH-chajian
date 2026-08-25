@@ -11,3 +11,5 @@
         pricing: null
     - id: dsh-worktable
       name: dsh-worktable
+    - id: dsh-github-sync
+      name: dsh-github-sync
