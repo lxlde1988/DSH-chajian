@@ -1,13 +1,17 @@
 ui-onboarding:
   welcomeNoticeVersion: 2026-08-13.1
 agent-default-model:
-  provider: deepseek-official
-  model: deepseek-v4-flash-vision-exp
-  reasoningEffort: high
+  provider: zai
+  model: GLM-5.3
 llm-pi-ai:
   providers:
     kimi-coding:
       apiKeyEnv: KIMI_CODING_API_KEY
+    zai:
+      apiKeyEnv: ZAI_API_KEY
+      models:
+        - id: GLM-5.3
+          name: GLM-5.3
 llm-deepseek:
   models:
     - id: deepseek-v4-flash
