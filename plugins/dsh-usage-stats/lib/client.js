@@ -308,8 +308,8 @@ window.__ModuleLoader__.load({
             onMouseEnter: onEnter,
             onMouseLeave: onLeave,
           },
-          React.createElement("div", { className: "usage-stats-pop-title" }, q ? "用量与配额" : "用量与余额"),
-        q
+          React.createElement("div", { className: "usage-stats-pop-title" }, plan ? "用量与配额" : "用量与余额"),
+        q && plan
           ? React.createElement(
               "div",
               { className: "usage-stats-qbars" },
@@ -321,7 +321,7 @@ window.__ModuleLoader__.load({
                 q.tools && q.tools.remaining != null ? `剩余 ${q.tools.remaining}` : undefined),
             )
           : null,
-        q
+        q && plan
           ? [
               q.level ? popRow("套餐档位", q.level) : null,
               q.fiveHour && q.fiveHour.resetAt != null
@@ -332,16 +332,16 @@ window.__ModuleLoader__.load({
                 : null,
             ].filter(Boolean)
           : null,
-        q ? React.createElement("div", { className: "usage-stats-pop-divider" }) : null,
-        !q
-          ? React.createElement(
+        q && plan ? React.createElement("div", { className: "usage-stats-pop-divider" }) : null,
+        plan
+          ? balance != null
+            ? popRow("DeepSeek 钱包", balance)
+            : null
+          : React.createElement(
               "div",
               { className: "usage-stats-pop-balance" },
               balance != null ? balance : "获取中…",
-            )
-          : balance != null
-            ? popRow("DeepSeek 钱包", balance)
-            : null,
+            ),
         snapshot.balance && snapshot.balance.infos
           ? snapshot.balance.infos.map((info) =>
               React.createElement(
@@ -409,6 +409,25 @@ window.__ModuleLoader__.load({
               { className: "usage-stats-error" },
               `GLM 配额获取失败：${snapshot.zaiQuotaError.message}`,
             )
+          : null,
+        // 非 GLM 模式下仍展示套餐余量作参考（灰置顶提示，不影响主信息）。
+        q && !plan
+          ? [
+              React.createElement("div", { key: "qdiv", className: "usage-stats-pop-divider" }),
+              React.createElement(
+                "div",
+                { key: "qtitle", className: "usage-stats-k" },
+                "GLM 配额（当前未使用）",
+              ),
+              React.createElement(
+                "div",
+                { key: "qbars", className: "usage-stats-qbars" },
+                QuotaBar("5h 窗口", q.fiveHour,
+                  q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+                QuotaBar("周配额", q.weekly,
+                  q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+              ),
+            ]
           : null,
         React.createElement(
           "div",
@@ -506,8 +525,16 @@ window.__ModuleLoader__.load({
       const q = quotaOf(snapshot);
       const qtext = quotaText(snapshot);
       const plan = onPlan(snapshot);
+      // 只有当前真的跑在 GLM（订阅制）上才显示配额圆环；切回 DeepSeek 则恢复余额显示。
+      const showQuota = plan && qtext != null;
       const label =
-        qtext != null ? qtext : text != null ? text : failed ? (errMsg || "获取失败") : "加载中…";
+        showQuota
+          ? qtext
+          : text != null
+            ? text
+            : failed
+              ? (errMsg || "获取失败")
+              : "加载中…";
       const lastRound = snapshot ? snapshot.lastRound : null;
       const lastCostSuffix =
         !plan && lastRound && lastRound.cost
@@ -556,7 +583,7 @@ window.__ModuleLoader__.load({
             ref: pillRef,
             type: "button",
             className: "usage-stats-pill" + (wide ? "" : " usage-stats-rail"),
-            "aria-label": qtext != null ? `GLM 配额 ${qtext}` : text ? `余额 ${text}` : "用量与余额",
+            "aria-label": showQuota ? `GLM 配额 ${qtext}` : text ? `余额 ${text}` : "用量与余额",
             onClick: () => {
               try {
                 window.open(topUpUrlOf(snapshot), "_blank", "noopener");
@@ -565,7 +592,7 @@ window.__ModuleLoader__.load({
               }
             },
           },
-          qtext != null
+          showQuota
             ? React.createElement(
                 "span",
                 { className: "usage-stats-quota" },
@@ -675,9 +702,9 @@ window.__ModuleLoader__.load({
           React.createElement(
             "div",
             { className: "usage-stats-k" },
-            q ? "GLM Coding Plan 配额" : "账户余额",
+            plan && q ? "GLM Coding Plan 配额" : "账户余额",
           ),
-          q
+          plan && q
             ? React.createElement(
                 "div",
                 { className: "usage-stats-qbars" },
@@ -693,7 +720,7 @@ window.__ModuleLoader__.load({
                 { className: "usage-stats-balance" },
                 balance != null ? balance : "—",
               ),
-          q
+          plan && q
             ? [
                 q.level ? ["套餐档位", q.level] : null,
                 q.fiveHour && q.fiveHour.resetAt != null
@@ -714,7 +741,7 @@ window.__ModuleLoader__.load({
                   ),
                 )
             : null,
-          !q && snapshot && snapshot.balance && snapshot.balance.infos
+          !plan && snapshot && snapshot.balance && snapshot.balance.infos
             ? snapshot.balance.infos.map((info) =>
                 React.createElement(
                   "div",
@@ -731,6 +758,20 @@ window.__ModuleLoader__.load({
                   ),
                 ),
               )
+            : null,
+          !plan && q
+            ? [
+                React.createElement("div", { key: "gq-k", className: "usage-stats-k", style: { marginTop: 12 } },
+                  "GLM 配额（当前未使用）"),
+                React.createElement(
+                  "div",
+                  { key: "gq-bars", className: "usage-stats-qbars" },
+                  QuotaBar("5h 窗口", q.fiveHour,
+                    q.fiveHour && q.fiveHour.resetAt != null ? `重置：${timeText(q.fiveHour.resetAt)}` : undefined),
+                  QuotaBar("周配额", q.weekly,
+                    q.weekly && q.weekly.resetAt != null ? `重置：${timeText(q.weekly.resetAt)}` : undefined),
+                ),
+              ]
             : null,
           snapshot && snapshot.error
             ? React.createElement(
