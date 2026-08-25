@@ -1,7 +1,7 @@
 {
   "name": "dsh-usage-stats",
   "description": "DeepSeek Harness usage & balance plugin: real-time account balance, token usage statistics, and one-click top-up.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
