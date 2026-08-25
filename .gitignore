@@ -1,0 +1,29 @@
+# ===== 密钥 / 个人信息（绝不入库）=====
+.credentials.yaml
+**/.credentials.yaml
+.dsh/.credentials.yaml
+*.key
+*.pem
+.env
+.env.*
+!*.example.yaml
+
+# ===== DSH 会话日志与本地数据（大且含对话隐私）=====
+.dsh/sessions/
+.dsh/storages/
+.dsh/attachments/
+
+# ===== 依赖与构建产物 =====
+node_modules/
+dist/
+build/
+
+# ===== 日志 / 临时 =====
+*.log
+*.tmp
+*.bak
+
+# ===== 操作系统 =====
+.DS_Store
+Thumbs.db
+desktop.ini

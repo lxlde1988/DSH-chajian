@@ -1,0 +1,13 @@
+- insert:
+    - id: usage-stats
+      name: 'dsh-usage-stats'
+      config:
+        apiKeyEnv: DEEPSEEK_API_KEY
+        baseUrl: 'https://api.deepseek.com'
+        topUpUrl: 'https://platform.deepseek.com/top_up'
+        refreshIntervalMs: 60000
+        pricingSource: 'https://api-docs.deepseek.com/quick_start/pricing/'
+        estimateModel: deepseek-v4-pro
+        pricing: null
+    - id: dsh-worktable
+      name: dsh-worktable
