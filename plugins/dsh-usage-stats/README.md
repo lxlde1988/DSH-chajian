@@ -65,7 +65,6 @@ dsh web
 | `refreshIntervalMs` | `60000` | 余额与定价的轮询间隔（毫秒） |
 | `pricingSource` | `https://api-docs.deepseek.com/quick_start/pricing/` | 官网价目页地址；`null` 关闭自动同步 |
 | `estimateModel` | `deepseek-v4-pro` | 用于费用估算的模型（token 跨模型聚合，估算本身为近似） |
-| `usdToCnyRate` | `7.2` | 官网价目（USD）折算成 CNY 的汇率，用于「上次回答费用」显示 |
 | `pricing` | `null` | 静态回退单价表（每百万 token，CNY），仅在自动同步关闭或解析失败时使用 |
 
 `pricing` 结构（单位：CNY / 1M tokens）：
