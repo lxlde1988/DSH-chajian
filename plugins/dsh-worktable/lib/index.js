@@ -375,6 +375,64 @@ async function wtSearchTwitterCli(kw) {
   if (!items.length) throw new Error("twitter-cli 无结果");
   return items;
 }
+/* ---- LLM 要点提炼（复用本机 .dsh 凭据，DeepSeek 主 / ZAI 兜底） ---- */
+function wtReadCred(name) {
+  try {
+    const raw = require("node:fs").readFileSync(pathResolve(homedir(), ".dsh", ".credentials.yaml"), "utf8");
+    const m = raw.match(new RegExp("^\\s*" + name + ":\\s*\"?([^\"\\s]+)\"?", "m"));
+    return m ? m[1] : "";
+  } catch { return ""; }
+}
+function wtHttpPostJson(url, headers, bodyObj, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const body = JSON.stringify(bodyObj);
+    const req = httpsRequest({ hostname: u.hostname, path: u.pathname + u.search, method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body), ...headers },
+      timeout: timeoutMs || 90000 }, (res) => {
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const txt = Buffer.concat(chunks).toString("utf8");
+        if (res.statusCode >= 200 && res.statusCode < 300) { try { resolve(JSON.parse(txt)); } catch { reject(new Error("LLM 响应非 JSON")); } }
+        else reject(new Error("LLM HTTP " + res.statusCode + " " + txt.slice(0, 200)));
+      });
+    });
+    req.on("error", reject);
+    req.on("timeout", () => { req.destroy(); reject(new Error("LLM 超时")); });
+    req.end(body);
+  });
+}
+async function wtLlmSummarize(kw, results) {
+  const lines = [];
+  let budget = 6000;
+  for (const r of results || []) {
+    if (r.status !== "ok" || !r.items || !r.items.length) continue;
+    for (const it of r.items.slice(0, 8)) {
+      const line = "[" + r.name + "] " + String(it.title || "").slice(0, 80) + (it.meta ? " | " + String(it.meta).slice(0, 60) : "");
+      if (budget - line.length < 0) break;
+      budget -= line.length;
+      lines.push(line);
+    }
+    if (budget <= 0) break;
+  }
+  if (!lines.length) throw new Error("没有可用于分析的结果");
+  const sys = "你是多平台搜索结果分析助手。只依据用户给定的材料提炼信息，绝不编造材料外的内容。用中文回答。";
+  const usr = "关键词「" + kw + "」在各平台的搜索结果如下：\n" + lines.join("\n") +
+    "\n\n请输出：\n1) 一句话总览这个主题\n2) 5~8 条要点，每条以「• 」开头并标注来源平台（如 [小红书]），合并同类信息\n3) 若材料中有值得注意的数字、日期或平台间的明显分歧，用一行「⚠ 」点出；没有则省略";
+  const msg = [{ role: "system", content: sys }, { role: "user", content: usr }];
+  const tryLlm = async (url, key, model) => {
+    const j = await wtHttpPostJson(url, { Authorization: "Bearer " + key }, { model, messages: msg, temperature: 0.3, max_tokens: 1200 }, 90000);
+    const c = j && j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content;
+    if (!c) throw new Error("LLM 空回复");
+    return String(c).trim();
+  };
+  const ds = wtReadCred("DEEPSEEK_API_KEY");
+  if (ds) { try { return await tryLlm("https://api.deepseek.com/chat/completions", ds, "deepseek-chat"); } catch (e) { console.error("[worktable] deepseek fail:", e.message); } }
+  const zai = wtReadCred("ZAI_API_KEY");
+  if (zai) { try { return await tryLlm("https://api.z.ai/api/paas/v4/chat/completions", zai, "GLM-5.3"); } catch (e) { console.error("[worktable] zai fail:", e.message); } }
+  throw new Error("所有 LLM 通道失败（检查 DEEPSEEK_API_KEY）");
+}
 function setupTerminal(webServer, ctx) {
   if (typeof webServer.registerUpgrade !== "function") return;
   const wsMod = loadPkg("ws");
@@ -556,6 +614,25 @@ function apply(ctx) {
       } catch (e) {
         json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
       }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/summarize",
+    handler: async (req, res) => {
+      if (req.method !== "POST") { res.writeHead(405); res.end(); return; }
+      let body = "";
+      req.on("data", (c) => { body += c; if (body.length > 512 * 1024) req.destroy(); });
+      req.on("end", async () => {
+        try {
+          const p = JSON.parse(body || "{}");
+          if (!p.kw) { json(res, 400, { ok: false, error: "missing kw" }); return; }
+          const summary = await wtLlmSummarize(p.kw, p.results || []);
+          json(res, 200, { ok: true, summary });
+        } catch (e) {
+          json(res, 502, { ok: false, error: String(e && e.message || e) });
+        }
+      });
     }
   });
   webServer.register({
