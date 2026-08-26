@@ -353,9 +353,21 @@ async function wtSearchXhsCli(kw) {
   if (!items.length) throw new Error("xhs-cli 无结果");
   return items;
 }
-async function wtSearchTwitterCli(kw) {
+function wtFmtTwDate(t) {
+  const s = String(t.createdAtLocal || t.createdAtISO || "");
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return "";
+  const now = new Date();
+  return String(now.getFullYear()) === m[1] ? m[2] + "-" + m[3] : m[1] + "-" + m[2] + "-" + m[3];
+}
+async function wtSearchTwitterCli(kw, days) {
   const env = await wtTwitterEnv();
-  const j = await wtCliRun(wtFindBin("twitter"), ["search", kw, "--max", "8", "--json"], 120000, {
+  const args = ["search", kw, "--max", "8", "--json"];
+  if (days > 0) {
+    const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    args.push("--since", since);
+  }
+  const j = await wtCliRun(wtFindBin("twitter"), args, 120000, {
     TWITTER_PROXY: env.proxy || "",
     TWITTER_AUTH_TOKEN: env.auth_token || "",
     TWITTER_CT0: env.ct0 || ""
@@ -365,11 +377,12 @@ async function wtSearchTwitterCli(kw) {
   for (const t of list.slice(0, 8)) {
     const a = t.author || {};
     const m = t.metrics || {};
+    const dt = wtFmtTwDate(t);
     items.push({
       title: String(t.text || "").replace(/\s+/g, " ").slice(0, 140),
       url: "https://x.com/" + (a.screenName || "i") + "/status/" + t.id,
       snippet: "",
-      meta: "❤ " + (m.likes || 0) + " · 🔁 " + (m.retweets || 0) + " · 👁 " + (m.views || 0) + " · @" + (a.screenName || "")
+      meta: (dt ? dt + " · " : "") + "❤ " + (m.likes || 0) + " · 🔁 " + (m.retweets || 0) + " · 👁 " + (m.views || 0) + " · @" + (a.screenName || "")
     });
   }
   if (!items.length) throw new Error("twitter-cli 无结果");
@@ -607,9 +620,10 @@ function apply(ctx) {
       if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
       const u = new URL(req.url ?? "/", "http://dsh.internal");
       const kw = u.searchParams.get("kw") || "";
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       try {
-        const items = await wtSearchTwitterCli(kw);
+        const items = await wtSearchTwitterCli(kw, days);
         json(res, 200, { kw, count: items.length, items, via: "twitter-api" });
       } catch (e) {
         json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
