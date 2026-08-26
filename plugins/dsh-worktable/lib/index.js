@@ -252,13 +252,13 @@ function wtJunk(u, title) {
   if (/^(24小时|48小时|1天|7天|30天|本周|本月|热门|最新|人们|探索|登录|注册|查看更多|更多结果)/.test(String(title || "").trim())) return true;
   return false;
 }
-async function wtSearchSo360(kw, domain) {
+async function wtSearchSo360(kw, domain, n) {
   const q = (domain ? "site:" + domain + " " : "") + kw;
   const html = await wtFetchText("https://www.so.com/s?q=" + encodeURIComponent(q) + "&pn=1", 20000);
   if (/antispider|验证码/.test(html)) throw new Error("360 反爬");
   const re = /<li[^>]+class="res-list[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
   const blocks = []; let m;
-  while ((m = re.exec(html)) && blocks.length < 10) {
+  while ((m = re.exec(html)) && blocks.length < Math.max(10, n || 8)) {
     const blk = m[1]; const am = blk.match(/<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
     if (!am) continue;
     const dm = blk.match(/<p[^>]+class="[^"]*res-desc[^"]*"[^>]*>([\s\S]*?)<\/p>/) || blk.match(/<p[^>]*>([\s\S]*?)<\/p>/);
@@ -278,13 +278,13 @@ async function wtSearchSo360(kw, domain) {
   });
   return items;
 }
-async function wtSearchBing(kw, domain) {
+async function wtSearchBing(kw, domain, n) {
   const q = (domain ? "site:" + domain + " " : "") + kw;
   const html = await wtFetchText("https://www.bing.com/search?q=" + encodeURIComponent(q) + "&count=12&mkt=zh-CN", 20000);
   const re = /<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/li>/g;
   const items = []; const seen = new Set(); let m;
   const ENGINE = ["bing.com", "microsoft.com", "msn.com", "duckduckgo.com", "google.com", "so.com"];
-  while ((m = re.exec(html)) && items.length < 8) {
+  while ((m = re.exec(html)) && items.length < (n || 8)) {
     const url = wtBingUnwrap(wtDecode(m[1])); const title = wtStrip(m[2]);
     if (!/^https?:\/\//.test(url) || title.length < 4) continue;
     const h = wtHost(url);
@@ -331,13 +331,13 @@ async function wtTwitterEnv() {
   if (!WT_TW_ENV) WT_TW_ENV = {};
   return WT_TW_ENV;
 }
-async function wtSearchXhsCli(kw) {
+async function wtSearchXhsCli(kw, n) {
   const j = await wtCliRun(wtFindBin("xhs"), ["search", kw, "--json"], 90000, { OUTPUT: "json" });
   const data = (j && (j.data || {})) || {};
   let list = data.items || data.result || [];
   if (!Array.isArray(list)) list = [];
   const items = [];
-  for (const it of list.slice(0, 8)) {
+  for (const it of list.slice(0, n || 8)) {
     const c = (it && (it.note_card || {})) || {};
     const info = c.interact_info || {};
     const id = it.id || "";
@@ -360,9 +360,9 @@ function wtFmtTwDate(t) {
   const now = new Date();
   return String(now.getFullYear()) === m[1] ? m[2] + "-" + m[3] : m[1] + "-" + m[2] + "-" + m[3];
 }
-async function wtSearchTwitterCli(kw, days) {
+async function wtSearchTwitterCli(kw, days, n) {
   const env = await wtTwitterEnv();
-  const args = ["search", kw, "--max", "8", "--json"];
+  const args = ["search", kw, "--max", String(Math.min(n || 8, 20)), "--json"];
   if (days > 0) {
     const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
     args.push("--since", since);
@@ -374,7 +374,7 @@ async function wtSearchTwitterCli(kw, days) {
   });
   const list = (j && Array.isArray(j.data)) ? j.data : [];
   const items = [];
-  for (const t of list.slice(0, 8)) {
+  for (const t of list.slice(0, Math.min(n || 8, 20))) {
     const a = t.author || {};
     const m = t.metrics || {};
     const dt = wtFmtTwDate(t);
@@ -589,10 +589,11 @@ function apply(ctx) {
       const u = new URL(req.url ?? "/", "http://dsh.internal");
       const kw = u.searchParams.get("kw") || "";
       const domain = u.searchParams.get("domain") || "";
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       let items = [], via = "", err = "";
-      try { items = await wtSearchSo360(kw, domain); via = "so360"; } catch (e) { err = String(e && e.message || e); }
-      if (!items.length) { try { items = await wtSearchBing(kw, domain); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
+      try { items = await wtSearchSo360(kw, domain, n); via = "so360"; } catch (e) { err = String(e && e.message || e); }
+      if (!items.length) { try { items = await wtSearchBing(kw, domain, n); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
       if (!items.length) { json(res, 502, { kw, domain, count: 0, items: [], error: err || "所有引擎均无结果" }); return; }
       json(res, 200, { kw, domain, count: items.length, items, via });
     }
@@ -604,9 +605,10 @@ function apply(ctx) {
       if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
       const u = new URL(req.url ?? "/", "http://dsh.internal");
       const kw = u.searchParams.get("kw") || "";
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       try {
-        const items = await wtSearchXhsCli(kw);
+        const items = await wtSearchXhsCli(kw, n);
         json(res, 200, { kw, count: items.length, items, via: "xhs-api" });
       } catch (e) {
         json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
@@ -621,9 +623,10 @@ function apply(ctx) {
       const u = new URL(req.url ?? "/", "http://dsh.internal");
       const kw = u.searchParams.get("kw") || "";
       const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       try {
-        const items = await wtSearchTwitterCli(kw, days);
+        const items = await wtSearchTwitterCli(kw, days, n);
         json(res, 200, { kw, count: items.length, items, via: "twitter-api" });
       } catch (e) {
         json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
