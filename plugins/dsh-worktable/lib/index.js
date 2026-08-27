@@ -252,13 +252,38 @@ function wtJunk(u, title) {
   if (/^(24小时|48小时|1天|7天|30天|本周|本月|热门|最新|人们|探索|登录|注册|查看更多|更多结果)/.test(String(title || "").trim())) return true;
   return false;
 }
-async function wtSearchSo360(kw, domain, n) {
+/* ---- 全局时效过滤助手 ---- */
+function wtAgeDaysFromText(t) {
+  t = String(t || "").trim();
+  let m = t.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+  if (m) return Math.floor((Date.now() - new Date(+m[1], +m[2] - 1, +m[3]).getTime()) / 86400000);
+  if (/今天|刚刚|分钟前|小时前|今年/.test(t)) return 0;
+  if ((m = t.match(/^(\d+)\s*天前/))) return +m[1];
+  if (/昨天/.test(t)) return 1;
+  if ((m = t.match(/(\d+)\s*个?月前/))) return +m[1] * 30;
+  if ((m = t.match(/(\d+)\s*周前/))) return +m[1] * 7;
+  if (/上周/.test(t)) return 7;
+  if (/去年/.test(t)) return 365;
+  if (/前年/.test(t)) return 730;
+  if ((m = t.match(/^(\d{1,2})[-/](\d{1,2})$/))) {
+    const dt = new Date(new Date().getFullYear(), +m[1] - 1, +m[2]);
+    const d = Math.floor((Date.now() - dt.getTime()) / 86400000);
+    return d < 0 ? 0 : d;
+  }
+  return null;
+}
+function wtIsStale(s, days) {
+  if (!days) return false;
+  const ad = wtAgeDaysFromText(String(s || "").replace(/\s+/g, " "));
+  return ad !== null && ad > days;
+}
+async function wtSearchSo360(kw, domain, n, days) {
   const q = (domain ? "site:" + domain + " " : "") + kw;
   const html = await wtFetchText("https://www.so.com/s?q=" + encodeURIComponent(q) + "&pn=1", 20000);
   if (/antispider|验证码/.test(html)) throw new Error("360 反爬");
   const re = /<li[^>]+class="res-list[^"]*"[^>]*>([\s\S]*?)<\/li>/g;
   const blocks = []; let m;
-  while ((m = re.exec(html)) && blocks.length < Math.max(10, n || 8)) {
+  while ((m = re.exec(html)) && blocks.length < Math.max(16, (n || 8) * 2)) {
     const blk = m[1]; const am = blk.match(/<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/);
     if (!am) continue;
     const dm = blk.match(/<p[^>]+class="[^"]*res-desc[^"]*"[^>]*>([\s\S]*?)<\/p>/) || blk.match(/<p[^>]*>([\s\S]*?)<\/p>/);
@@ -272,15 +297,16 @@ async function wtSearchSo360(kw, domain, n) {
     if (domain) { const h = wtHost(url); if (h && h.indexOf(domain) < 0 && url.indexOf(domain) < 0) return; }
     if (!b.title || b.title.length < 2 || b.title === "小红书" || b.title === "微博") return;
     if (wtJunk(url, b.title)) return;
+    if (wtIsStale(b.title + " " + b.snip, days)) return;
     if (seen.has(url)) return;
     seen.add(url);
     items.push({ title: b.title.slice(0, 120), url, snippet: b.snip });
   });
   return items;
 }
-async function wtSearchBing(kw, domain, n) {
+async function wtSearchBing(kw, domain, n, days) {
   const q = (domain ? "site:" + domain + " " : "") + kw;
-  const html = await wtFetchText("https://www.bing.com/search?q=" + encodeURIComponent(q) + "&count=12&mkt=zh-CN", 20000);
+  const html = await wtFetchText("https://www.bing.com/search?q=" + encodeURIComponent(q) + "&count=" + Math.max(16, (n || 8) * 2) + "&mkt=zh-CN", 20000);
   const re = /<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<\/li>/g;
   const items = []; const seen = new Set(); let m;
   const ENGINE = ["bing.com", "microsoft.com", "msn.com", "duckduckgo.com", "google.com", "so.com"];
@@ -294,7 +320,9 @@ async function wtSearchBing(kw, domain, n) {
     seen.add(url);
     const blk = m[0];
     const pm = blk.match(/<p[^>]*class="[^"]*(?:b_lineclamp|b_paractl)[^"]*"[^>]*>([\s\S]*?)<\/p>/) || blk.match(/<p[^>]*>([\s\S]*?)<\/p>/);
-    items.push({ title: title.slice(0, 120), url, snippet: pm ? wtStrip(pm[1]).slice(0, 200) : "" });
+    const snip = pm ? wtStrip(pm[1]).slice(0, 200) : "";
+    if (wtIsStale(title + " " + snip, days)) continue;
+    items.push({ title: title.slice(0, 120), url, snippet: snip });
   }
   return items;
 }
@@ -331,24 +359,28 @@ async function wtTwitterEnv() {
   if (!WT_TW_ENV) WT_TW_ENV = {};
   return WT_TW_ENV;
 }
-async function wtSearchXhsCli(kw, n) {
+async function wtSearchXhsCli(kw, n, days) {
   const j = await wtCliRun(wtFindBin("xhs"), ["search", kw, "--json"], 90000, { OUTPUT: "json" });
   const data = (j && (j.data || {})) || {};
   let list = data.items || data.result || [];
   if (!Array.isArray(list)) list = [];
   const items = [];
-  for (const it of list.slice(0, n || 8)) {
+  for (const it of list.slice(0, Math.max(24, (n || 8) * 2))) {
     const c = (it && (it.note_card || {})) || {};
     const info = c.interact_info || {};
     const id = it.id || "";
     const token = it.xsec_token || (c.user && c.user.xsec_token) || "";
+    const pt = (((c.corner_tag_info || []).find((x) => x && x.type === "publish_time") || {}).text) || "";
+    const ad = wtAgeDaysFromText(pt);
+    if (days && ad !== null && ad > days) continue;
     const author = (c.user && (c.user.nickname || c.user.nick_name)) || "";
     items.push({
       title: String(c.display_title || "").slice(0, 120),
       url: "https://www.xiaohongshu.com/explore/" + id + "?xsec_token=" + encodeURIComponent(token) + "&xsec_source=pc_search",
       snippet: "",
-      meta: "❤ " + (info.liked_count || 0) + " · 💬 " + (info.comment_count || 0) + " · 收藏 " + (info.collected_count || 0) + " · " + author
+      meta: (pt ? pt + " · " : "") + "❤ " + (info.liked_count || 0) + " · 💬 " + (info.comment_count || 0) + " · 收藏 " + (info.collected_count || 0) + " · " + author
     });
+    if (items.length >= (n || 8)) break;
   }
   if (!items.length) throw new Error("xhs-cli 无结果");
   return items;
@@ -590,10 +622,11 @@ function apply(ctx) {
       const kw = u.searchParams.get("kw") || "";
       const domain = u.searchParams.get("domain") || "";
       const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       let items = [], via = "", err = "";
-      try { items = await wtSearchSo360(kw, domain, n); via = "so360"; } catch (e) { err = String(e && e.message || e); }
-      if (!items.length) { try { items = await wtSearchBing(kw, domain, n); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
+      try { items = await wtSearchSo360(kw, domain, n, days); via = "so360"; } catch (e) { err = String(e && e.message || e); }
+      if (!items.length) { try { items = await wtSearchBing(kw, domain, n, days); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
       if (!items.length) { json(res, 502, { kw, domain, count: 0, items: [], error: err || "所有引擎均无结果" }); return; }
       json(res, 200, { kw, domain, count: items.length, items, via });
     }
@@ -606,9 +639,10 @@ function apply(ctx) {
       const u = new URL(req.url ?? "/", "http://dsh.internal");
       const kw = u.searchParams.get("kw") || "";
       const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
       if (!kw) { json(res, 400, { error: "missing kw" }); return; }
       try {
-        const items = await wtSearchXhsCli(kw, n);
+        const items = await wtSearchXhsCli(kw, n, days);
         json(res, 200, { kw, count: items.length, items, via: "xhs-api" });
       } catch (e) {
         json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
