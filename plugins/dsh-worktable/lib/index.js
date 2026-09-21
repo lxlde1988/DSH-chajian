@@ -89,7 +89,7 @@ body {
 var dshell_default2 = '<!doctype html>\n<!-- dsh-worktable \u539F\u751F\u76AE\u80A4\u6A21\u677F\uFF1A\u65B0\u9875\u9762\u4EE5\u6B64\u4E3A\u57FA\u7840\uFF0C\u66FF\u6362\u4E0B\u9762\u793A\u4F8B\u5185\u5BB9\u5373\u53EF\u3002\n     \u6837\u5F0F\u8868\u7531\u63D2\u4EF6\u63D0\u4F9B\uFF08\u968F\u4E3B\u9898\u81EA\u52A8\u9002\u914D\uFF09\uFF0C\u4E0D\u8981\u590D\u5236\u6216\u6539\u5199\u5B83\u3002 -->\n<html lang="zh-CN">\n<head>\n  <meta charset="utf-8" />\n  <meta name="viewport" content="width=device-width, initial-scale=1" />\n  <title>\u6211\u7684\u7A97\u53E3</title>\n  <link rel="stylesheet" href="/api/worktable/template/dshell.css" />\n</head>\n<body>\n  <div class="dshell">\n    <!-- \u6807\u9898\u533A -->\n    <h1 class="dshell-title">\u7A97\u53E3\u6807\u9898</h1>\n    <p class="dshell-sub">\u4E00\u53E5\u8BDD\u8BF4\u660E\u8FD9\u4E2A\u7A97\u53E3\u505A\u4EC0\u4E48\u3002</p>\n\n    <!-- \u72B6\u6001\u5FBD\u6807\uFF1A\u5DF2\u5B8C\u6210 dshell-badgeDone / \u8FDB\u884C\u4E2D dshell-badgeWait / \u9ED8\u8BA4 -->\n    <div>\n      <span class="dshell-badge dshell-badgeDone">\u5DF2\u5B8C\u6210</span>\n      <span class="dshell-badge dshell-badgeWait">\u8FDB\u884C\u4E2D</span>\n      <span class="dshell-badge">\u672A\u5F00\u59CB</span>\n    </div>\n\n    <!-- \u6807\u7B7E\u9875 -->\n    <div class="dshell-tabs">\n      <button class="dshell-tab dshell-tabOn">\u6982\u89C8</button>\n      <button class="dshell-tab">\u8BE6\u60C5</button>\n      <button class="dshell-tab">\u8BBE\u7F6E</button>\n    </div>\n\n    <!-- \u7EDF\u8BA1\u5361\u7247\u7F51\u683C -->\n    <div class="dshell-grid">\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u603B\u6570</div>\n        <div class="dshell-statValue">128</div>\n        <div class="dshell-statDelta">+12.4%</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u8FDB\u884C\u4E2D</div>\n        <div class="dshell-statValue">7</div>\n      </div>\n      <div class="dshell-stat">\n        <div class="dshell-statLabel">\u5DF2\u5B8C\u6210</div>\n        <div class="dshell-statValue">121</div>\n      </div>\n    </div>\n\n    <!-- \u5217\u8868 -->\n    <div class="dshell-list">\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E00\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-listItemMeta">\u6628\u5929</span>\n      </div>\n      <div class="dshell-listItem">\n        <span class="dshell-listItemTitle">\u6761\u76EE\u4E8C\uFF1A\u793A\u4F8B\u5185\u5BB9\u6807\u9898</span>\n        <span class="dshell-badge dshell-badgeDone">\u5DF2\u53D1\u5E03</span>\n      </div>\n    </div>\n\n    <!-- \u5361\u7247 + \u952E\u503C\u5BF9 -->\n    <div class="dshell-card">\n      <h2 class="dshell-sub" style="margin:0 0 8px">\u8BE6\u60C5</h2>\n      <div class="dshell-kv">\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 A</span><span class="dshell-kvValue">\u503C A</span></div>\n        <div class="dshell-kvRow"><span class="dshell-kvKey">\u5B57\u6BB5 B</span><span class="dshell-kvValue">\u503C B</span></div>\n      </div>\n      <div class="dshell-divider"></div>\n      <div class="dshell-progress"><div class="dshell-progressBar" style="width:72%"></div></div>\n    </div>\n\n    <!-- \u64CD\u4F5C\u533A -->\n    <div style="display:flex;gap:8px">\n      <button class="dshell-btn">\u4E3B\u8981\u64CD\u4F5C</button>\n      <button class="dshell-btn dshell-btnGhost">\u6B21\u8981\u64CD\u4F5C</button>\n    </div>\n  </div>\n</body>\n</html>\n';
 
 // src/index.ts
-var PLUGIN_VERSION = false ? "dev" : "0.2.2";
+var PLUGIN_VERSION = false ? "dev" : "0.3.1";
 var name = "dsh-worktable";
 var inject = ["webServer", "sessions"];
 var HEALTH_PATH = "/api/worktable/health";
@@ -614,79 +614,6 @@ function apply(ctx) {
     }
   });
   webServer.register({
-    kind: "exact",
-    path: "/api/worktable/searchrelay",
-    handler: async (req, res) => {
-      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
-      const u = new URL(req.url ?? "/", "http://dsh.internal");
-      const kw = u.searchParams.get("kw") || "";
-      const domain = u.searchParams.get("domain") || "";
-      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
-      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
-      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
-      let items = [], via = "", err = "";
-      try { items = await wtSearchSo360(kw, domain, n, days); via = "so360"; } catch (e) { err = String(e && e.message || e); }
-      if (!items.length) { try { items = await wtSearchBing(kw, domain, n, days); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
-      if (!items.length) { json(res, 502, { kw, domain, count: 0, items: [], error: err || "所有引擎均无结果" }); return; }
-      json(res, 200, { kw, domain, count: items.length, items, via });
-    }
-  });
-  webServer.register({
-    kind: "exact",
-    path: "/api/worktable/xhssearch",
-    handler: async (req, res) => {
-      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
-      const u = new URL(req.url ?? "/", "http://dsh.internal");
-      const kw = u.searchParams.get("kw") || "";
-      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
-      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
-      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
-      try {
-        const items = await wtSearchXhsCli(kw, n, days);
-        json(res, 200, { kw, count: items.length, items, via: "xhs-api" });
-      } catch (e) {
-        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
-      }
-    }
-  });
-  webServer.register({
-    kind: "exact",
-    path: "/api/worktable/twittersearch",
-    handler: async (req, res) => {
-      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
-      const u = new URL(req.url ?? "/", "http://dsh.internal");
-      const kw = u.searchParams.get("kw") || "";
-      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
-      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
-      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
-      try {
-        const items = await wtSearchTwitterCli(kw, days, n);
-        json(res, 200, { kw, count: items.length, items, via: "twitter-api" });
-      } catch (e) {
-        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
-      }
-    }
-  });
-  webServer.register({
-    kind: "exact",
-    path: "/api/worktable/summarize",
-    handler: async (req, res) => {
-      if (req.method !== "POST") { res.writeHead(405); res.end(); return; }
-      let body = "";
-      req.on("data", (c) => { body += c; if (body.length > 512 * 1024) req.destroy(); });
-      req.on("end", async () => {
-        try {
-          const p = JSON.parse(body || "{}");
-          if (!p.kw) { json(res, 400, { ok: false, error: "missing kw" }); return; }
-          const summary = await wtLlmSummarize(p.kw, p.results || []);
-          json(res, 200, { ok: true, summary });
-        } catch (e) {
-          json(res, 502, { ok: false, error: String(e && e.message || e) });
-        }
-      });
-    }
-  });
-  webServer.register({
     kind: "prefix",
     path: TEMPLATE_PREFIX,
     handler: (req, res) => {
@@ -858,6 +785,79 @@ function apply(ctx) {
       const body = await readJsonBody(req);
       const cwd = serverCwd(ctx, body.sessionId, body.cwd);
       json(res, 200, await gitStatus(cwd));
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/searchrelay",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      const domain = u.searchParams.get("domain") || "";
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      let items = [], via = "", err = "";
+      try { items = await wtSearchSo360(kw, domain, n, days); via = "so360"; } catch (e) { err = String(e && e.message || e); }
+      if (!items.length) { try { items = await wtSearchBing(kw, domain, n, days); via = "bing"; } catch (e) { err = String(e && e.message || e); } }
+      if (!items.length) { json(res, 502, { kw, domain, count: 0, items: [], error: err || "所有引擎均无结果" }); return; }
+      json(res, 200, { kw, domain, count: items.length, items, via });
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/xhssearch",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      try {
+        const items = await wtSearchXhsCli(kw, n, days);
+        json(res, 200, { kw, count: items.length, items, via: "xhs-api" });
+      } catch (e) {
+        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
+      }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/twittersearch",
+    handler: async (req, res) => {
+      if (req.method !== "GET") { res.writeHead(405); res.end(); return; }
+      const u = new URL(req.url ?? "/", "http://dsh.internal");
+      const kw = u.searchParams.get("kw") || "";
+      const days = parseInt(u.searchParams.get("days") || "0", 10) || 0;
+      const n = parseInt(u.searchParams.get("n") || "8", 10) || 8;
+      if (!kw) { json(res, 400, { error: "missing kw" }); return; }
+      try {
+        const items = await wtSearchTwitterCli(kw, days, n);
+        json(res, 200, { kw, count: items.length, items, via: "twitter-api" });
+      } catch (e) {
+        json(res, 502, { kw, count: 0, items: [], error: String(e && e.message || e) });
+      }
+    }
+  });
+  webServer.register({
+    kind: "exact",
+    path: "/api/worktable/summarize",
+    handler: async (req, res) => {
+      if (req.method !== "POST") { res.writeHead(405); res.end(); return; }
+      let body = "";
+      req.on("data", (c) => { body += c; if (body.length > 512 * 1024) req.destroy(); });
+      req.on("end", async () => {
+        try {
+          const p = JSON.parse(body || "{}");
+          if (!p.kw) { json(res, 400, { ok: false, error: "missing kw" }); return; }
+          const summary = await wtLlmSummarize(p.kw, p.results || []);
+          json(res, 200, { ok: true, summary });
+        } catch (e) {
+          json(res, 502, { ok: false, error: String(e && e.message || e) });
+        }
+      });
     }
   });
   setupTerminal(webServer, ctx);
